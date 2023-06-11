@@ -1,0 +1,8 @@
+[package]
+name = "yagbe"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+bitflags = "2.3.1"
+sdl2 = "0.35.2"
