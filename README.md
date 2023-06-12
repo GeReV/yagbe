@@ -16,6 +16,9 @@ and the [bitflags crate](https://docs.rs/bitflags/latest/bitflags/) for convenie
 
 Most resources used were picked up in the excellent [Awesome Game Boy Development](https://github.com/gbdev/awesome-gbdev) list on GitHub.
 
+Before starting the project, I read the "[Writing NES Emulator in Rust](https://bugzmanov.github.io/nes_ebook/)" e-book 
+by [@bugzmanov](https://github.com/bugzmanov/), to get a general idea of how an emulator is structured.
+
 #### Reference:
 - [Pan Docs](https://gbdev.github.io/pandocs/) - Used as the main reference for the entire console.
 
