@@ -368,7 +368,11 @@ impl Cpu {
                     m_cycles = 3;
                 }
             }
-            0x29 => self.add_hl(self.registers.hl()),
+            0x29 => {
+                self.add_hl(self.registers.hl());
+                
+                m_cycles = 2;
+            }
             0x2a => {
                 self.registers.a = self.bus.mem_read(self.registers.hl());
                 self.inc_hl();
@@ -793,7 +797,7 @@ impl Cpu {
             }
             0xcb => {
                 let value = self.read_u8();
-                self.cb(value);
+                m_cycles = self.cb(value);
             }
             0xcc => {
                 let addr = self.read_u16();
@@ -1110,7 +1114,7 @@ impl Cpu {
         }
     }
 
-    fn cb(&mut self, value: u8) {
+    fn cb(&mut self, value: u8) -> usize {
         let register_value = match value & 0x7 {
             0x0 => self.registers.b,
             0x1 => self.registers.c,
@@ -1154,6 +1158,14 @@ impl Cpu {
                 _ => unreachable!()
             };
         }
+
+        let m_cycles = match (value >> 4, value & 0x0f) {
+            (0x4..=0x7, 0x6 | 0xe) => 3,
+            (_, 0x6 | 0xe) => 4,
+            _ => 2
+        };
+        
+        return m_cycles;
     }
 
     fn add(&mut self, register_value: u8, value: u8) -> u8 {
