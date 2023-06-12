@@ -1,5 +1,7 @@
 mod cpu;
 mod bus;
+mod ppu;
+mod io_registers;
 
 extern crate sdl2;
 
@@ -20,15 +22,16 @@ pub(crate) trait Mem {
 }
 
 fn main() -> Result<(), String> {
-    // TODO
-    // let rom = fs::read("cpu_instrs\\individual\\02-interrupts.gb").unwrap();
-    let rom = fs::read("cpu_instrs\\individual\\08-misc instrs.gb").unwrap();
-    // let rom = fs::read("cpu_instrs\\individual\\11-op a,(hl).gb").unwrap();
-    
+    // let rom = fs::read("test\\cpu_instrs\\cpu_instrs.gb").unwrap();
+    // let rom = fs::read("test\\instr_timing\\instr_timing.gb").unwrap();
+    // let rom = fs::read("test\\interrupt_time\\interrupt_time.gb").unwrap();
+    // let rom = fs::read("test\\mem_timing\\mem_timing.gb").unwrap();
+    let rom = fs::read("test\\mem_timing-2\\mem_timing.gb").unwrap();
+
+    // let file = fs::File::create("log.txt").unwrap();
+    // let mut writer = LineWriter::with_capacity(512 * 1024 * 1024, file);
     
     let mut cpu = cpu::Cpu::new();
-    
-    let mut log = fs::File::create("log.txt").unwrap();
     
     cpu.load(rom);
 
@@ -62,7 +65,7 @@ fn main() -> Result<(), String> {
         canvas.set_draw_color(Color::RGB(0, 0, 255));
         canvas.clear();
         
-        cpu.run_to_frame(&mut log);
+        cpu.run_to_frame();
         
         for (index, &color) in cpu.bus.ppu.screen.iter().enumerate() {
             canvas.set_draw_color(Color::RGB(color, color, color));
@@ -73,6 +76,8 @@ fn main() -> Result<(), String> {
         
         ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60 ));
     }
+    
+    // writer.flush().unwrap();
 
     Ok(())
 }
