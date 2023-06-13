@@ -2,6 +2,7 @@ mod cpu;
 mod bus;
 mod ppu;
 mod io_registers;
+mod cpu_registers;
 
 extern crate sdl2;
 
@@ -14,6 +15,7 @@ use std::time::Duration;
 extern crate bitflags;
 
 use std::fs;
+use std::io::Write;
 use sdl2::rect::Point;
 
 pub(crate) trait Mem {
@@ -23,15 +25,18 @@ pub(crate) trait Mem {
 
 fn main() -> Result<(), String> {
     // let rom = fs::read("test\\cpu_instrs\\cpu_instrs.gb").unwrap();
-    // let rom = fs::read("test\\instr_timing\\instr_timing.gb").unwrap();
+    let rom = fs::read("test\\instr_timing\\instr_timing.gb").unwrap();
     // let rom = fs::read("test\\interrupt_time\\interrupt_time.gb").unwrap();
     // let rom = fs::read("test\\mem_timing\\mem_timing.gb").unwrap();
-    let rom = fs::read("test\\mem_timing-2\\mem_timing.gb").unwrap();
+    // let rom = fs::read("test\\mem_timing\\individual\\01-read_timing.gb").unwrap();
+    // let rom = fs::read("test\\mem_timing\\individual\\02-write_timing.gb").unwrap();
+    // let rom = fs::read("test\\mem_timing\\individual\\03-modify_timing.gb").unwrap();
+    // let rom = fs::read("test\\mem_timing-2\\mem_timing.gb").unwrap();
 
-    // let file = fs::File::create("log.txt").unwrap();
-    // let mut writer = LineWriter::with_capacity(512 * 1024 * 1024, file);
+    let file = fs::File::create("log.txt").unwrap();
+    let writer = std::io::LineWriter::with_capacity(512 * 1024 * 1024, file);
     
-    let mut cpu = cpu::Cpu::new();
+    let mut cpu = cpu::Cpu::new(writer);
     
     cpu.load(rom);
 
@@ -49,6 +54,7 @@ fn main() -> Result<(), String> {
     canvas.set_scale(2.0, 2.0).unwrap();
     
     let mut event_pump = sdl_context.event_pump()?;
+    
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -77,7 +83,5 @@ fn main() -> Result<(), String> {
         ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60 ));
     }
     
-    // writer.flush().unwrap();
-
     Ok(())
 }

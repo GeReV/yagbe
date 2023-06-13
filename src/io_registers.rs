@@ -2,7 +2,7 @@
 use crate::Mem;
 
 bitflags! {
-    #[derive(Default, Copy, Clone, PartialEq, Eq)]
+    #[derive(Default, Copy, Clone, PartialEq, Eq, Debug)]
     pub struct InterruptFlags : u8 {
         const VBLANK = 1 << 0;
         const LCD_STAT = 1 << 1;
