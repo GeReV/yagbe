@@ -7,7 +7,7 @@ use crate::cpu_registers::{CpuFlags, CpuRegisters};
 use crate::io_registers::InterruptFlags;
 
 fn invalid_instruction() {
-    panic!("invalid instruction")
+    // panic!("invalid instruction")
 }
 
 #[derive(Clone, Copy)]
@@ -26,8 +26,6 @@ pub struct Cpu {
     registers: CpuRegisters,
     pub bus: Bus,
     halted: bool,
-    cpu_clock: u16,
-    clock_accumulator: usize,
     logger: LineWriter<std::fs::File>,
 }
 
@@ -38,8 +36,6 @@ impl Cpu {
             registers: Default::default(),
             bus: Bus::new(),
             halted: false,
-            cpu_clock: 0,
-            clock_accumulator: 0,
             logger: writer,
         }
     }
@@ -70,15 +66,25 @@ impl Cpu {
     }
 
     fn execute(&mut self) -> MCycles {
-        let m_cycles = match self.interrupt_service_routine() {
-            true => MCycles(5),
-            _ => self.handle_instruction()
+        if self.interrupt_service_routine() {
+            return MCycles(5);
         };
         
-        writeln!(self.logger, "{}   @$ff05 = ${:X}", self.registers, self.bus.io_registers.tima).unwrap();
+        if self.registers.pc == 0xC3c2 && self.bus.io_registers.tima == 0xff {
+            let  x = 1;
+        } 
+
+        let m_cycles = self.handle_instruction();
+
+        
+        if self.registers.pc == 0xC3DC && self.bus.io_registers.tima == 0x7f {
+            let  x = 1;
+        } 
 
         self.handle_timers(m_cycles);
         
+        writeln!(self.logger, "{}   @$ff05\" \"@$ff07 = ${:X} ${:X}", self.registers, self.bus.io_registers.tima, self.bus.io_registers.tac).unwrap();
+
         return m_cycles;
     }
 
@@ -108,7 +114,7 @@ impl Cpu {
                 self.registers.set_bc(self.registers.bc().wrapping_add(1));
 
                 m_cycles = MCycles(2);
-            }   
+            }
             0x04 => self.registers.b = self.inc_r8(self.registers.b),
             0x05 => self.registers.b = self.dec_r8(self.registers.b),
             0x06 => {
@@ -156,7 +162,7 @@ impl Cpu {
             0x10 => {
                 let _ = self.read_u8();
 
-                self.cpu_clock = 0;
+                self.bus.io_registers.cpu_clock = 0;
             }
             0x11 => {
                 let value = self.read_u16();
@@ -1033,9 +1039,9 @@ impl Cpu {
     fn handle_timers(&mut self, m_cycles: MCycles) {
         let t_cycles = m_cycles.0 * 4;
 
-        self.cpu_clock = self.cpu_clock.wrapping_add(t_cycles as u16);
+        self.bus.io_registers.cpu_clock = self.bus.io_registers.cpu_clock.wrapping_add(t_cycles as u16);
 
-        self.bus.io_registers.div = (self.cpu_clock >> 8) as u8 % 64;
+        self.bus.io_registers.div = (self.bus.io_registers.cpu_clock >> 8) as u8 % 64;
 
         let timer_enable = self.bus.io_registers.tac & 0b0000_0100 != 0;
 
@@ -1048,20 +1054,18 @@ impl Cpu {
         };
 
         if timer_enable {
-            self.clock_accumulator += t_cycles;
-            
-            while self.clock_accumulator > timer_update_freq {
-                self.clock_accumulator -= timer_update_freq;
+            self.bus.io_registers.clock_accumulator += t_cycles;
 
-                if self.bus.io_registers.tima == 0 {
-                    self.bus.io_registers.tima = self.bus.io_registers.tma;
-                }
+            while self.bus.io_registers.clock_accumulator >= timer_update_freq {
+                self.bus.io_registers.clock_accumulator -= timer_update_freq;
 
                 let (tima, reset) = self.bus.io_registers.tima.overflowing_add(1);
 
                 self.bus.io_registers.tima = tima;
 
                 if reset {
+                    self.bus.io_registers.tima = self.bus.io_registers.tma;
+
                     self.bus.io_registers.interrupt_flag.insert(InterruptFlags::TIMER);
                 }
             }
@@ -1387,8 +1391,6 @@ impl Cpu {
         for flag in InterruptFlags::all().iter() {
             if self.bus.io_registers.interrupt_enable.contains(flag) && self.bus.io_registers.interrupt_flag.contains(flag) {
                 self.bus.io_registers.interrupt_flag.remove(flag);
-
-                writeln!(self.logger, "interrupt: {:?}", flag).unwrap();
 
                 let handler_addr = match flag {
                     InterruptFlags::VBLANK => 0x0040,

@@ -63,7 +63,7 @@ impl Mem for Bus {
         return match addr {
             0x0000..=0x3fff => self.bank0[addr as usize],
             0x4000..=0x7fff => self.bank1[(addr - 0x4000) as usize],
-            0x8000..=0x9fff => self.ppu.mem_read(addr),
+            0x8000..=0x9fff => self.ppu.vram.mem_read(addr),
             0xa000..=0xbfff => {
                 0xff
             },
@@ -91,10 +91,11 @@ impl Mem for Bus {
                 let rom_size_type = self.program[OFFSET_ROM_SIZE];
 
                 let bank_count_mask = match rom_size_type {
-                    0x00 | 0x04 => 0b0001_1111,
+                    0x00 => 0b0000_0001,
                     0x01 => 0b0000_0011,
                     0x02 => 0b0000_0111,
                     0x03 => 0b0000_1111,
+                    0x04 => 0b0001_1111,
                     // TODO: The rest take 2 bits from a different register.
                     _ => unreachable!()
                 };
@@ -103,10 +104,12 @@ impl Mem for Bus {
 
                 let allow_bank0_mirroring = bank & 0b0001_0000 != 0;
 
-                if allow_bank0_mirroring && bank == 0x10 {
-                    bank = 0x00;
-                } else if bank == 0x00 {
-                    bank = 0x01;
+                if bank == 0x00 {
+                    bank = if allow_bank0_mirroring {
+                        0x00
+                    } else { 
+                        0x01
+                    };
                 }
 
                 let bank_offset = bank as usize * 0x4000;
@@ -123,11 +126,11 @@ impl Mem for Bus {
                 //      0000–3FFF and A000–BFFF can be bank-switched via the 4000–5FFF bank register
                 let value = value & 0b0000_0001;
             }
-            0x8000..=0x9fff => self.ppu.mem_write(addr, value),
+            0x8000..=0x9fff => self.ppu.vram.mem_write(addr, value),
             0xa000..=0xbfff => {},
             0xc000..=0xdfff => self.wram[(addr - 0xc000) as usize] = value,
             0xe000..=0xfdff => self.wram[(addr - 0xe000) as usize] = value,
-            0xfe00..=0xfe9f => self.ppu.mem_write(addr, value),
+            0xfe00..=0xfe9f => self.ppu.vram.mem_write(addr, value),
             0xfea0..=0xfeff => {}, // panic!("not usable"),
             0xff00..=0xff7f => self.io_registers.mem_write(addr, value),
             0xff80..=0xfffe => self.hram[(addr - 0xff80) as usize] = value,

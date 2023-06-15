@@ -18,7 +18,9 @@ pub struct IoRegisters {
     pub sb: u8,
     pub sc: u8,
     pub div: u8,
+    pub cpu_clock: u16,
     pub tima: u8,
+    pub clock_accumulator: usize,
     pub tma: u8,
     pub tac: u8,
     pub interrupt_flag: InterruptFlags,
@@ -131,7 +133,7 @@ impl Mem for IoRegisters {
             0xff76 => panic!("cgb only"),
             0xff77 => panic!("cgb only"),
             0xffff => self.interrupt_enable.bits(),
-            _ => panic!("invalid IO register address")
+            _ => 0xff, //panic!("invalid IO register address")
         };
     }
 
@@ -140,10 +142,20 @@ impl Mem for IoRegisters {
             0xff00 => self.joyp = value & 0b0011_0000,
             0xff01 => self.sb = value,
             0xff02 => self.sc = value,
-            0xff04 => self.div = 0,
+            0xff04 => {
+                self.div = 0;
+                self.cpu_clock = 0;
+            }
             0xff05 => self.tima = value,
             0xff06 => self.tma = value,
-            0xff07 => self.tac = value,
+            0xff07 => {
+                if (self.tac & 0b0000_0011) != (value & 0b0000_0011) {
+                    self.tima = self.tma;
+                    self.clock_accumulator = 0;
+                }
+                
+                self.tac = 0xf8 | value;
+            }
             0xff0f => self.interrupt_flag = InterruptFlags::from_bits_truncate(value),
             0xff10 => self.nr10 = value,
             0xff11 => self.nr11 = value, // TODO: Mixed?
@@ -209,7 +221,9 @@ impl IoRegisters {
             sb: 0x00,
             sc: 0x7e,
             div: 0xab,
+            cpu_clock: 0,
             tima: 0x00,
+            clock_accumulator: 0,
             tma: 0x00,
             tac: 0xf8,
             interrupt_flag: InterruptFlags::from_bits_retain(0xe1),

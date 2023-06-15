@@ -15,7 +15,6 @@ use std::time::Duration;
 extern crate bitflags;
 
 use std::fs;
-use std::io::Write;
 use sdl2::rect::Point;
 
 pub(crate) trait Mem {
@@ -24,14 +23,22 @@ pub(crate) trait Mem {
 }
 
 fn main() -> Result<(), String> {
-    // let rom = fs::read("test\\cpu_instrs\\cpu_instrs.gb").unwrap();
-    let rom = fs::read("test\\instr_timing\\instr_timing.gb").unwrap();
-    // let rom = fs::read("test\\interrupt_time\\interrupt_time.gb").unwrap();
+    // let rom = fs::read("test\\cpu_instrs\\cpu_instrs.gb").unwrap();                          // Pass
+    let rom = fs::read("test\\instr_timing\\instr_timing.gb").unwrap();                      // Pass
+    // let rom = fs::read("test\\interrupt_time\\interrupt_time.gb").unwrap();                  // Requires CGB
     // let rom = fs::read("test\\mem_timing\\mem_timing.gb").unwrap();
-    // let rom = fs::read("test\\mem_timing\\individual\\01-read_timing.gb").unwrap();
+    // let rom = fs::read("test\\mem_timing\\individual\\01-read_timing.gb").unwrap();          
     // let rom = fs::read("test\\mem_timing\\individual\\02-write_timing.gb").unwrap();
     // let rom = fs::read("test\\mem_timing\\individual\\03-modify_timing.gb").unwrap();
     // let rom = fs::read("test\\mem_timing-2\\mem_timing.gb").unwrap();
+    // let rom = fs::read("test\\mem_timing-2\\rom_singles\\01-read_timing.gb").unwrap();
+    // let rom = fs::read("test\\mem_timing-2\\rom_singles\\02-write_timing.gb").unwrap();
+    // let rom = fs::read("test\\mem_timing-2\\rom_singles\\03-modify_timing.gb").unwrap();
+    // let rom = fs::read("test\\dmg-acid2\\dmg-acid2.gb").unwrap();
+    
+    
+    
+    
 
     let file = fs::File::create("log.txt").unwrap();
     let writer = std::io::LineWriter::with_capacity(512 * 1024 * 1024, file);
