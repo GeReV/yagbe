@@ -56,7 +56,7 @@ impl Cpu {
         'frame: loop {
             let m_cycles = self.execute();
             let t_cycles = m_cycles.0 * 4;
-
+            
             for _ in 0..t_cycles * 2 {
                 if self.bus.ppu.tick(&mut self.bus.io_registers) {
                     break 'frame;
@@ -66,24 +66,29 @@ impl Cpu {
     }
 
     fn execute(&mut self) -> MCycles {
+        // Handle DMA copy sequence.
+        if self.bus.io_registers.dma_counter > 0 {
+            let src_base_addr = (self.bus.io_registers.dma as u16) << 8;
+            
+            let byte_index: u16 = 160 - self.bus.io_registers.dma_counter as u16;
+            
+            let v = self.bus.mem_read(src_base_addr + byte_index);
+            self.bus.mem_write(0xfe00 + byte_index, v);
+            
+            self.bus.io_registers.dma_counter -= 1;
+            
+            return MCycles(1);
+        }
+        
         if self.interrupt_service_routine() {
             return MCycles(5);
         };
-        
-        if self.registers.pc == 0xC3c2 && self.bus.io_registers.tima == 0xff {
-            let  x = 1;
-        } 
 
         let m_cycles = self.handle_instruction();
 
-        
-        if self.registers.pc == 0xC3DC && self.bus.io_registers.tima == 0x7f {
-            let  x = 1;
-        } 
-
         self.handle_timers(m_cycles);
         
-        writeln!(self.logger, "{}   @$ff05\" \"@$ff07 = ${:X} ${:X}", self.registers, self.bus.io_registers.tima, self.bus.io_registers.tac).unwrap();
+        writeln!(self.logger, "{}", self.registers).unwrap();
 
         return m_cycles;
     }
@@ -93,6 +98,10 @@ impl Cpu {
 
         if self.halted {
             return m_cycles;
+        }
+        
+        if self.registers.pc == 0x021c {
+            let x = 1;
         }
 
         let instruction = self.read_u8();
@@ -1384,12 +1393,12 @@ impl Cpu {
 
         self.interrupts_master_enable = false;
 
-        self.halted = false;
-
         let mut handled = false;
 
         for flag in InterruptFlags::all().iter() {
             if self.bus.io_registers.interrupt_enable.contains(flag) && self.bus.io_registers.interrupt_flag.contains(flag) {
+                self.halted = false;
+                
                 self.bus.io_registers.interrupt_flag.remove(flag);
 
                 let handler_addr = match flag {
@@ -1402,14 +1411,13 @@ impl Cpu {
                 };
 
                 self.call(handler_addr);
-
+                
                 handled = true;
-
+                
                 break;
             }
         }
 
-        // TODO: Necessary, or rely on RETI instruction?
         self.interrupts_master_enable = true;
 
         return handled;

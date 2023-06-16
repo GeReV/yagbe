@@ -12,6 +12,20 @@ bitflags! {
     }
 }
 
+bitflags! {
+    #[derive(Default, Copy, Clone, Debug)]
+    pub struct LCDControl : u8 {
+        const BG_WINDOW_ENABLE = 1 << 0;
+        const OBJ_ENABLE = 1 << 1;
+        const OBJ_SIZE = 1 << 2; // 0=8x8, 1=8x16
+        const BG_TILEMAP_AREA = 1 << 3; // 0=9800-9BFF, 1=9C00-9FFF
+        const BG_TILEDATA_AREA = 1 << 4; // 0=8800-97FF, 1=8000-8FFF
+        const WINDOW_ENABLE = 1 << 5;
+        const WINDOW_TILEMAP_AREA = 1 << 6; // 0=9800-9BFF, 1=9C00-9FFF
+        const LCD_PPU_ENABLE = 1 << 7;
+    }
+}
+
 #[derive(Default)]
 pub struct IoRegisters {
     pub joyp: u8,
@@ -46,17 +60,19 @@ pub struct IoRegisters {
     pub nr51: u8,
     pub nr52: u8,
     pub wave_ram: [u8; 0x10],
-    pub lcdc: u8,
+    pub lcdc: LCDControl,
     pub stat: u8,
     pub scy: u8,
     pub scx: u8,
     pub ly: u8,
     pub lyc: u8,
     pub dma: u8,
+    pub dma_counter: u8,
     pub bgp: u8,
     pub obp0: u8,
     pub obp1: u8,
     pub wy: u8,
+    pub window_ly: u8,
     pub wx: u8,
     pub key1: u8,
     pub vbk: u8,
@@ -108,7 +124,7 @@ impl Mem for IoRegisters {
             0xff25 => self.nr51,
             0xff26 => self.nr52,
             0xff30..=0xff3f => self.wave_ram[(addr - 0xff30) as usize],
-            0xff40 => self.lcdc,
+            0xff40 => self.lcdc.bits(),
             0xff41 => self.stat,
             0xff42 => self.scy,
             0xff43 => self.scx,
@@ -179,18 +195,23 @@ impl Mem for IoRegisters {
             0xff25 => self.nr51 = value,
             0xff26 => self.nr52 = value, // TODO: Mixed?
             0xff30..=0xff3f => self.wave_ram[(addr - 0xff30) as usize] = value,
-            0xff40 => self.lcdc = value,
-            0xff41 => self.stat = value & 0b1111_1000,
+            0xff40 => self.lcdc = LCDControl::from_bits_retain(value),
+            0xff41 => self.stat = value & 0b0111_1000 | 0b1000_0000,
             0xff42 => self.scy = value,
             0xff43 => self.scx = value,
             0xff44 => {} // panic!("cannot write ly register"),
             0xff45 => self.lyc = value,
-            0xff46 => self.dma = value,
+            0xff46 => {
+                self.dma = value;
+                self.dma_counter = 160;
+            },
             0xff47 => self.bgp = value,
             0xff48 => self.obp0 = value,
             0xff49 => self.obp1 = value,
             0xff4a => self.wy = value,
-            0xff4b => self.wx = value,
+            0xff4b => { 
+                self.wx = value;
+            },
             0xff4d => {}
             0xff4f => {}
             0xff51 => self.hdma1 = value,
@@ -249,17 +270,19 @@ impl IoRegisters {
             nr51: 0xf3,
             nr52: 0xf1,
             wave_ram: [0; 0x10],
-            lcdc: 0x91,
+            lcdc: LCDControl::from_bits_retain(0x91),
             stat: 0x85,
             scy: 0x00,
             scx: 0x00,
             ly: 0x00,
             lyc: 0x00,
             dma: 0xff,
+            dma_counter: 0,
             bgp: 0xfc,
             obp0: 0x00,
             obp1: 0x00,
             wy: 0x00,
+            window_ly: 0,
             wx: 0x00,
             key1: 0xff,
             vbk: 0xff,
