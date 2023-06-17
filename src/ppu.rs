@@ -149,6 +149,8 @@ impl Ppu {
                     }
                 }
             }
+
+            registers.ly = (self.dot_counter / 456) as u8;
         } else {
             // TODO: This should be used to take into account at which step we are.
             let line_dot = self.dot_counter % 456;

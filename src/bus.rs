@@ -1,4 +1,5 @@
-﻿use crate::io_registers::IoRegisters;
+﻿use crate::bus::BankingMode::{AdvancedRomOrRamBanking, Simple};
+use crate::io_registers::IoRegisters;
 use crate::Mem;
 use crate::ppu::Ppu;
 
@@ -8,10 +9,36 @@ const OFFSET_CARTRIDGE_TYPE: usize = 0x0147;
 const OFFSET_ROM_SIZE: usize = 0x0148;
 const OFFSET_RAM_SIZE: usize = 0x0149;
 
+pub fn cartridge_ram_size_kib(ram_size_type: u8) -> usize {
+    match ram_size_type {
+        0 => 0,
+        2 => 8,
+        3 => 32,
+        4 => 128,
+        5 => 64,
+        _ => unreachable!(),
+    }
+}
+
+#[derive(PartialEq, Clone, Copy)]
+pub enum BankingMode {
+    // 00 = Simple Banking Mode (default)
+    //      0000–3FFF and A000–BFFF locked to bank 0 of ROM/RAM
+    Simple,
+    // 01 = RAM Banking Mode / Advanced ROM Banking Mode
+    //      0000–3FFF and A000–BFFF can be bank-switched via the 4000–5FFF bank register
+    AdvancedRomOrRamBanking
+}
+
 pub struct Bus {
     program: Vec<u8>,
     pub bank0: [u8; 0x4000],
     pub bank1: [u8; 0x4000],
+    pub banking_mode: BankingMode,
+    pub cartridge_ram_size_type: u8,
+    pub ram_enable: bool,
+    pub ram_current_bank: u8,
+    pub ram_banks: Vec<[u8; 0x2000]>,
     pub wram: [u8; 0x2000],
     pub hram: [u8; 0x7f],
     pub ppu: Ppu,
@@ -24,6 +51,11 @@ impl Bus {
             program: Vec::new(),
             bank0: [0; 0x4000],
             bank1: [0; 0x4000],
+            banking_mode: Simple,
+            cartridge_ram_size_type: 0,
+            ram_enable: false,
+            ram_current_bank: 0,
+            ram_banks: Vec::with_capacity(0),
             wram: [0; 0x2000],
             hram: [0; 0x7f],
             ppu: Ppu::new(),
@@ -39,7 +71,12 @@ impl Bus {
         let rom_size_type = program[OFFSET_ROM_SIZE];
         let rom_size_bytes: usize = 32 * 1024 * (1 << rom_size_type);
 
-        let ram_size_type = program[OFFSET_RAM_SIZE];
+        self.cartridge_ram_size_type = program[OFFSET_RAM_SIZE];
+        
+        let cartridge_ram_bytes_total = cartridge_ram_size_kib(self.cartridge_ram_size_type) * 1024;
+        
+        self.ram_banks = Vec::with_capacity(cartridge_ram_bytes_total / 0x2000);
+        self.ram_banks.fill([0; 0x2000]);
 
         self.bank0.copy_from_slice(&program[0x0000..=0x3fff]);
         self.bank1.copy_from_slice(&program[0x4000..=0x7fff]);
@@ -65,7 +102,13 @@ impl Mem for Bus {
             0x4000..=0x7fff => self.bank1[(addr - 0x4000) as usize],
             0x8000..=0x9fff => self.ppu.vram.mem_read(addr),
             0xa000..=0xbfff => {
-                0xff
+                let addr = (addr - 0xa000) as usize;
+                
+                match (self.ram_enable, self.banking_mode) {
+                    (false, _) => 0xff,
+                    (_, Simple) => self.ram_banks[0][addr],
+                    (_, AdvancedRomOrRamBanking) => self.ram_banks[self.ram_current_bank as usize][addr]
+                }
             },
             0xc000..=0xdfff => self.wram[(addr - 0xc000) as usize],
             0xe000..=0xfdff => self.wram[(addr - 0xe000) as usize],
@@ -85,7 +128,7 @@ impl Mem for Bus {
     fn mem_write(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x1fff => {
-                let enable_ram = value;
+                self.ram_enable = value & 0x0f == 0x0a;
             }
             0x2000..=0x3fff => {
                 let rom_size_type = self.program[OFFSET_ROM_SIZE];
@@ -117,17 +160,40 @@ impl Mem for Bus {
                 self.bank1.copy_from_slice(&self.program[bank_offset..=(bank_offset + 0x3fff)]);
             }
             0x4000..=0x5fff => {
-                let value = value & 0b0000_0011;
+                if self.banking_mode == AdvancedRomOrRamBanking {
+                    let value = value & 0b0000_0011;
+                    
+                    if self.cartridge_ram_size_type == 3 {
+                        self.ram_current_bank = value;
+                    } else if false /* 1MiB ROM or larger */ {
+                        // Use value for bits 4-5 of ROM bank number.
+                    }
+                }
             }
             0x6000..=0x7fff => {
-                // 00 = Simple Banking Mode (default)
-                //      0000–3FFF and A000–BFFF locked to bank 0 of ROM/RAM
-                // 01 = RAM Banking Mode / Advanced ROM Banking Mode
-                //      0000–3FFF and A000–BFFF can be bank-switched via the 4000–5FFF bank register
                 let value = value & 0b0000_0001;
+                
+                self.banking_mode = match value {
+                    0 => Simple,
+                    1 => AdvancedRomOrRamBanking,
+                    _ => unreachable!()
+                };
             }
             0x8000..=0x9fff => self.ppu.vram.mem_write(addr, value),
-            0xa000..=0xbfff => {},
+            0xa000..=0xbfff => {
+                if !self.ram_enable {
+                    return;
+                }
+                
+                let bank = match self.banking_mode {
+                    Simple => 0,
+                    AdvancedRomOrRamBanking => self.ram_current_bank,
+                };
+                
+                let addr = (addr - 0xa000) as usize;
+                
+                self.ram_banks[bank as usize][addr] = value;
+            },
             0xc000..=0xdfff => self.wram[(addr - 0xc000) as usize] = value,
             0xe000..=0xfdff => self.wram[(addr - 0xe000) as usize] = value,
             0xfe00..=0xfe9f => self.ppu.vram.mem_write(addr, value),
