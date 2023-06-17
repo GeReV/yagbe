@@ -37,7 +37,7 @@ fn fetch_tile_bytes(vram: &Vram, registers: &IoRegisters, tile_index: u8, pixel_
     let tile_vram_addr: u16 = match (tile_data_area, tile_index) {
         (true, _) => 0x8000 + (tile_index as u16 * 16),
         (false, 0..=127) => 0x9000 + (tile_index as u16 * 16),
-        (false, 128..=255) => 0x8800 + (tile_index as u16 * 16),
+        (false, 128..=255) => 0x8800 + ((tile_index - 128) as u16 * 16),
         _ => unreachable!()
     };
 
@@ -59,7 +59,7 @@ struct Oam {
     pub x: u8,
     pub tile_index: u8,
     pub attributes: u8,
-    oam_index: usize,
+    oam_address: u16,
 }
 
 pub struct Vram {
@@ -100,6 +100,7 @@ pub struct Ppu {
     pub dot_counter: usize,
     pub vram: Vram,
     scanline_x: u8,
+    sprites: Vec<Oam>,
     pub screen: [u8; 160 * 144],
 }
 
@@ -109,6 +110,7 @@ impl Ppu {
             dot_counter: 0,
             vram: Vram::new(),
             scanline_x: 0,
+            sprites: Vec::with_capacity(10),
             screen: [0; 160 * 144],
         }
     }
@@ -117,7 +119,7 @@ impl Ppu {
         let mut result = false;
 
         let lcd_enable = registers.lcdc.contains(LCDControl::LCD_PPU_ENABLE);
-        
+
         if !lcd_enable {
             registers.stat = registers.stat & 0b1111_1000;
         }
@@ -154,6 +156,13 @@ impl Ppu {
             let window_enable = registers.lcdc.contains(LCDControl::WINDOW_ENABLE) && registers.wx < 167 && registers.wy < 144;
             let is_window_scanline = window_enable && registers.ly >= registers.wy && registers.ly < registers.wy.wrapping_add(144);
 
+            let sprite_16 = registers.lcdc.contains(LCDControl::OBJ_SIZE);
+            let sprite_height: u8 = if sprite_16 {
+                16
+            } else {
+                8
+            };
+
             if line_dot == 0 {
                 mode = 2;
 
@@ -164,11 +173,14 @@ impl Ppu {
 
             if line_dot == 80 {
                 mode = 3;
+
+                self.sprites.clear();
+                self.fetch_sprites(registers, sprite_height);
             }
 
             if mode == 3 {
                 let sprites_enable = registers.lcdc.contains(LCDControl::OBJ_ENABLE);
-                
+
                 let is_window_tile = is_window_scanline && (self.scanline_x + 7) >= registers.wx && (self.scanline_x + 7) <= registers.wx.saturating_add(159);
 
                 let (tile_offset_x, tile_pixel_offset_y) = if is_window_tile {
@@ -178,7 +190,7 @@ impl Ppu {
                     )
                 } else {
                     (
-                        ((registers.scx / 8) + self.scanline_x / 8) & 0x1f,
+                        (registers.scx.wrapping_add(self.scanline_x) / 8) & 0x1f,
                         registers.ly.wrapping_add(registers.scy)
                     )
                 };
@@ -192,7 +204,8 @@ impl Ppu {
                     tile_map_addr = 0x9c00;
                 }
 
-                let tile_index = self.vram.mem_read(tile_map_addr + (tile_pixel_offset_y / 8) as u16 * 32 + tile_offset_x as u16);
+                let tile_addr = tile_map_addr + (tile_pixel_offset_y / 8) as u16 * 32 + tile_offset_x as u16;
+                let tile_index = self.vram.mem_read(tile_addr);
 
                 let (tile_byte_lo, tile_byte_hi) = fetch_tile_bytes(&self.vram, registers, tile_index, tile_pixel_offset_y);
 
@@ -208,52 +221,51 @@ impl Ppu {
                 // (this condition is ignored on CGB) and the X coordinate of the current scanline has a sprite on it. 
                 // If those conditions are not met then sprite fetching is aborted.
                 let mut sprite_pixel: Option<SpritePixel> = None;
+
                 if sprites_enable {
-                    let sprite_16 = registers.lcdc.contains(LCDControl::OBJ_SIZE);
-                    let sprite_height: u8 = if sprite_16 {
-                        16
-                    } else {
-                        8
-                    };
+                    let is_sprite_on_scanline_pixel = |s: &Oam| self.scanline_x + 8 >= s.x && self.scanline_x < s.x;
 
-                    let mut sprites = self.fetch_sprites(&registers, sprite_height);
-
-                    if sprites.iter().any(|s| self.scanline_x + 7 >= s.x && self.scanline_x <= s.x) {
-                        sprites.sort_by(|a, b| match a.x.cmp(&b.x) {
-                            Ordering::Equal => a.oam_index.cmp(&b.oam_index),
+                    if self.sprites.iter().any(is_sprite_on_scanline_pixel) {
+                        self.sprites.sort_by(|a, b| match a.x.cmp(&b.x) {
+                            Ordering::Equal => a.oam_address.cmp(&b.oam_address),
                             ord => ord
                         });
 
-                        for sprite in sprites {
-                            if self.scanline_x + 7 < sprite.x || self.scanline_x > sprite.x {
+                        for sprite in self.sprites.iter() {
+                            if !is_sprite_on_scanline_pixel(sprite) {
                                 continue;
                             }
 
                             let flip_sprite_v = sprite.attributes & (1 << 6) != 0;
                             let flip_sprite_h = sprite.attributes & (1 << 5) != 0;
-                            
-                            let sprite_y_offset = sprite.y - registers.ly + sprite_height - 16;
-                            let sprite_tile_offset = sprite_y_offset / 8;
 
-                            let tile_index = match (sprite_16, flip_sprite_v, sprite_tile_offset) {
-                                (false, _, 0) => sprite.tile_index,
-                                (true, true, 0) | (true, false, 1) => sprite.tile_index & 0xfe,
-                                (true, true, 1) | (true, false, 0) => sprite.tile_index | 0x01,
-                                _ => unreachable!(),
+                            let (tile_index, tile_row_offset) = if sprite_16 {
+                                let tile_index = match (flip_sprite_v, registers.ly + 16 - sprite.y < 8) {
+                                    (true, true) | (false, false) => sprite.tile_index | 0x01,
+                                    _ => sprite.tile_index & 0xfe,
+                                };
+
+                                let tile_row_offset = (registers.ly + sprite_height - sprite.y) % 8;
+
+                                (tile_index, tile_row_offset)
+                            } else {
+                                (
+                                    sprite.tile_index,
+                                    ((sprite.y as isize - 16 + registers.ly as isize) % 8) as u8
+                                )
                             };
 
-                            let tile_row_offset = sprite_y_offset % 8;
-                            
+
                             let tile_row_offset = if flip_sprite_v {
-                                tile_row_offset
-                            } else {
                                 7 - tile_row_offset
+                            } else {
+                                tile_row_offset
                             };
 
                             let sprite_tile_byte_lo_addr = self.vram.mem_read(0x8000 + tile_index as u16 * 16 + tile_row_offset as u16 * 2 + 0);
                             let sprite_tile_byte_hi_addr = self.vram.mem_read(0x8000 + tile_index as u16 * 16 + tile_row_offset as u16 * 2 + 1);
 
-                            let pixel_offset = self.scanline_x + 7 - sprite.x;
+                            let pixel_offset = self.scanline_x + 8 - sprite.x;
                             let pixel_offset = if flip_sprite_h {
                                 pixel_offset
                             } else {
@@ -290,8 +302,12 @@ impl Ppu {
                 }
 
                 if let Some(sprite_pixel) = sprite_pixel {
-                    if lcd_enable && sprites_enable && sprite_pixel.color != 0 && !sprite_pixel.bg_over_obj {
-                        final_pixel = (sprite_pixel.palette >> (sprite_pixel.color * 2)) & 0b0000_0011;
+                    let color = (sprite_pixel.palette >> (sprite_pixel.color * 2)) & 0b0000_0011;
+
+                    if lcd_enable && sprites_enable {
+                        if sprite_pixel.bg_over_obj && bg_pixel != 0 {} else if sprite_pixel.color != 0 {
+                            final_pixel = color;
+                        }
                     }
                 }
 
@@ -303,19 +319,15 @@ impl Ppu {
                     if self.scanline_x == 0 {
                         mode = 0;
 
-                        // result = true;
-
                         if lcd_enable && registers.stat & (1 << 3) != 0 {
                             registers.interrupt_flag.insert(InterruptFlags::LCD_STAT);
                         }
 
                         if lcd_enable {
-                            // println!("{window_enable} {} {}", registers.ly, self.window_ly);
-                            
                             if is_window_scanline {
                                 registers.window_ly = (registers.window_ly + 1) % 144;
                             }
-                            
+
                             registers.ly += 1;
                         }
                     }
@@ -327,7 +339,7 @@ impl Ppu {
 
         if self.dot_counter == 70224 {
             self.dot_counter = 0;
-            
+
             registers.ly = 0;
             registers.window_ly = 0;
 
@@ -341,16 +353,14 @@ impl Ppu {
         return result;
     }
 
-    fn fetch_sprites(&mut self, registers: &&mut IoRegisters, sprite_height: u8) -> Vec<Oam> {
-        let mut sprites: Vec<Oam> = Vec::with_capacity(10);
-
-        for (index, sprite_addr) in (0xfe00..=0xfe9f).step_by(4).enumerate() {
+    fn fetch_sprites(&mut self, registers: &mut IoRegisters, sprite_height: u8) {
+        for sprite_addr in (0xfe00..=0xfe9f).step_by(4) {
+            let ly = registers.ly;
             let sprite_y = self.vram.mem_read(sprite_addr);
 
-            let y = registers.ly as isize;
-            if (sprite_y as isize - 16) < y && y <= (sprite_y as isize - 16 + sprite_height as isize) {
-                sprites.push(Oam {
-                    oam_index: index,
+            if sprite_y <= ly + 16 && ly + 16 - sprite_height < sprite_y {
+                self.sprites.push(Oam {
+                    oam_address: sprite_addr,
                     y: sprite_y,
                     x: self.vram.mem_read(sprite_addr + 1),
                     tile_index: self.vram.mem_read(sprite_addr + 2),
@@ -358,11 +368,9 @@ impl Ppu {
                 });
             }
 
-            if sprites.len() == sprites.capacity() {
+            if self.sprites.len() == self.sprites.capacity() {
                 break;
             }
         }
-
-        return sprites;
     }
 }

@@ -59,7 +59,6 @@ fn main() -> Result<(), String> {
     canvas.set_scale(2.0, 2.0).unwrap();
     
     let mut event_pump = sdl_context.event_pump()?;
-    
 
     'running: loop {
         for event in event_pump.poll_iter() {
