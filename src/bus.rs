@@ -1,4 +1,5 @@
-﻿use crate::bus::BankingMode::{AdvancedRomOrRamBanking, Simple};
+﻿use crate::apu::Apu;
+use crate::bus::BankingMode::{AdvancedRomOrRamBanking, Simple};
 use crate::io_registers::IoRegisters;
 use crate::Mem;
 use crate::ppu::Ppu;
@@ -42,6 +43,7 @@ pub struct Bus {
     pub wram: [u8; 0x2000],
     pub hram: [u8; 0x7f],
     pub ppu: Ppu,
+    pub apu: Apu,
     pub io_registers: IoRegisters,
 }
 
@@ -59,6 +61,7 @@ impl Bus {
             wram: [0; 0x2000],
             hram: [0; 0x7f],
             ppu: Ppu::new(),
+            apu: Apu::new(),
             io_registers: IoRegisters::new(),
         }
     }
@@ -118,7 +121,8 @@ impl Mem for Bus {
                 // TODO: OAM corruption, return 0?
                 return 0xff;
             }
-            0xff00..=0xff7f => self.io_registers.mem_read(addr),
+            0xff10..=0xff26 => self.apu.mem_read(addr),
+            0xff00..=0xff0f | 0xff30..=0xff7f => self.io_registers.mem_read(addr),
             0xff80..=0xfffe => self.hram[(addr - 0xff80) as usize],
             0xffff => self.io_registers.mem_read(addr),
             _ => unreachable!()
