@@ -331,22 +331,26 @@ impl Ppu {
 
                             registers.ly += 1;
                         }
+                        
+                        // result = true;
                     }
                 }
             }
         }
 
-        self.dot_counter += 1;
+        if lcd_enable {
+            self.dot_counter += 1;
+        }
 
         if self.dot_counter == 70224 {
             self.dot_counter = 0;
+
+            result = true;
 
             registers.ly = 0;
             registers.window_ly = 0;
 
             registers.interrupt_flag.remove(InterruptFlags::VBLANK | InterruptFlags::LCD_STAT);
-
-            result = true;
         }
 
         registers.stat = (registers.stat & 0b1111_1100) | (mode & 0b0000_0011);

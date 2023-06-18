@@ -28,6 +28,8 @@ bitflags! {
 
 #[derive(Default)]
 pub struct IoRegisters {
+    pub joyp_directions: u8,
+    pub joyp_actions: u8,
     pub joyp: u8,
     pub sb: u8,
     pub sc: u8,
@@ -111,7 +113,12 @@ impl Mem for IoRegisters {
 
     fn mem_write(&mut self, addr: u16, value: u8) {
         return match addr {
-            0xff00 => self.joyp = value & 0b0011_0000,
+            // NOTE: Values of JOYP are 0 for selected/pressed, so everything is inversed.
+            0xff00 => self.joyp = 0b1100_0000 | match value {
+                0x20 => 0x20 | self.joyp_directions,
+                0x10 => 0x10 | self.joyp_actions,
+                _ => self.joyp,
+            },
             0xff01 => self.sb = value,
             0xff02 => self.sc = value,
             0xff04 => {
@@ -175,6 +182,8 @@ impl IoRegisters {
     pub fn new() -> Self {
         Self {
             // https://gbdev.io/pandocs/Power_Up_Sequence.html
+            joyp_directions: 0x0f,
+            joyp_actions: 0x0f,
             joyp: 0xcf,
             sb: 0x00,
             sc: 0x7e,
