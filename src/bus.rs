@@ -51,7 +51,7 @@ impl Bus {
     pub fn new() -> Self {
         Bus {
             program: Vec::new(),
-            rom_current_bank: 0,
+            rom_current_bank: 1,
             rom_banks: Vec::with_capacity(0),
             banking_mode: Simple,
             cartridge_ram_size_type: 0,
