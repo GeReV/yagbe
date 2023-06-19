@@ -51,3 +51,8 @@ by [@bugzmanov](https://github.com/bugzmanov/), to get a general idea of how an 
    
    Ironically, any game ROMs tested still failed to show an image. As of writing these lines, I believe this is due to
    the audio system being unimplemented.
+3. After debugging the emulator's run on a ROM of [Tetris](https://en.wikipedia.org/wiki/Tetris_(Game_Boy_video_game)) 
+   and comparing it to against traces from Emulicious, it turned out that the implementation of the joystick inputs was
+   not properly implemented.  
+   
+   After fixing those issues, the emulator ran its first game roms with at least some success.
