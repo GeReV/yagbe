@@ -1,8 +1,12 @@
 ﻿use std::cmp::Ordering;
+use std::collections::VecDeque;
+use std::ops::IndexMut;
 use bitflags::Flags;
 
 use crate::io_registers::{InterruptFlags, IoRegisters, LCDControl};
 use crate::Mem;
+use crate::ppu::PixelFetcherMode::{Background, Object, Window};
+use crate::ppu::PixelFetcherState::{GetTileId, GetTileRowHigh, GetTileRowLow, PushPixels, Sleep};
 
 /// Memory Map
 /// 0000	3FFF	16 KiB ROM bank 00	From cartridge, usually a fixed bank
@@ -48,7 +52,231 @@ fn fetch_tile_bytes(vram: &Vram, registers: &IoRegisters, tile_index: u8, pixel_
     (tile_byte_lo, tile_byte_hi)
 }
 
+enum PixelFetcherState {
+    Sleep,
+    GetTileId,
+    GetTileRowLow {
+        tile_index: u8,
+    },
+    GetTileRowHigh {
+        tile_address: u16,
+        tile_byte_lo: u8,
+    },
+    PushPixels {
+        tile_byte_lo: u8,
+        tile_byte_hi: u8,
+    },
+}
+
+enum PixelFetcherMode {
+    Background {
+        tile_address: u16,
+    },
+    Window {
+        tile_address: u16,
+    },
+    Object {
+        x: u8,
+        y: u8,
+        attributes: u8,
+        tile_index: u8,
+    },
+}
+
+struct PixelFetcher {
+    dot_counter: usize,
+    pub state: PixelFetcherState,
+    mode: PixelFetcherMode,
+    bg_fifo: VecDeque<u8>,
+    obj_fifo: VecDeque<SpritePixel>,
+}
+
+impl PixelFetcher {
+    pub fn new() -> Self {
+        Self {
+            dot_counter: 0,
+            state: Sleep,
+            mode: Background { tile_address: 0x9800 },
+            bg_fifo: VecDeque::with_capacity(8),
+            obj_fifo: VecDeque::with_capacity(8),
+        }
+    }
+
+    pub fn tick(&mut self, vram: &Vram, registers: &IoRegisters) {
+        self.dot_counter = self.dot_counter.wrapping_add(1);
+
+        match self.state {
+            Sleep => {}
+            GetTileId => {
+                if self.dot_counter % 2 == 1 {
+                    return;
+                }
+
+                let tile_index = match self.mode {
+                    Background { tile_address } => vram.mem_read(tile_address),
+                    Window { tile_address } => vram.mem_read(tile_address),
+                    Object { tile_index, .. } => tile_index
+                };
+
+                self.state = GetTileRowLow {
+                    tile_index,
+                };
+            }
+            GetTileRowLow { tile_index } => {
+                if self.dot_counter % 2 == 1 {
+                    return;
+                }
+
+                // https://github.com/gbdev/pandocs/blob/bbdc0ef79ba46dcc8183ad788b651ae25b52091d/src/Rendering_Internals.md#get-tile-row-low
+                // For BG/Window tiles, bit 12 depends on LCDC bit 4. If that bit is set ("$8000 mode"), then bit 12 is always 0; otherwise ("$8800 mode"), it is the negation of the tile ID's bit 7. 
+                // The full logical formula is thus: !((LCDC & $10) || (tileID & $80)) (see gate VUZA in the schematics).
+                let bit_12 = !(registers.lcdc.contains(LCDControl::BG_TILEDATA_AREA) || (tile_index & (1 << 7) != 0));
+                let bit_12: u16 = if bit_12 { 1 } else { 0 };
+
+                let tile_index = tile_index as u16;
+
+                let tile_address = match self.mode {
+                    Background { .. } => {
+                        0b1000_0000_0000_0000 | (bit_12 << 12) | tile_index << 4 | ((registers.ly.wrapping_add(registers.scy) % 8) << 1) as u16
+                    }
+                    Window { .. } => {
+                        0b1000_0000_0000_0000 | (bit_12 << 12) | tile_index << 4 | ((registers.window_ly % 8) as u16) << 1
+                    }
+                    Object { y, attributes, .. } => {
+                        let mut row_offset = (registers.ly - y % 8) % 8;
+
+                        let flip_sprite_v = attributes & (1 << 6) != 0;
+
+                        if flip_sprite_v {
+                            row_offset = 7 - row_offset;
+                        }
+
+                        0b1000_0000_0000_0000 | tile_index << 4 | (row_offset << 1) as u16
+                    }
+                };
+
+                let tile_byte_lo = vram.mem_read(tile_address);
+
+                self.state = GetTileRowHigh {
+                    tile_byte_lo,
+                    tile_address,
+                };
+            }
+            GetTileRowHigh { tile_byte_lo, tile_address } => {
+                if self.dot_counter % 2 == 1 {
+                    return;
+                }
+
+                let tile_byte_hi = vram.mem_read(tile_address + 1);
+
+                self.state = PushPixels {
+                    tile_byte_lo,
+                    tile_byte_hi,
+                };
+            }
+            PushPixels { tile_byte_lo, tile_byte_hi } => {
+                if let Object { x, attributes, .. } = self.mode {
+                    while self.obj_fifo.len() < 8 {
+                        self.obj_fifo.push_back(SpritePixel {
+                            x: x + self.obj_fifo.len() as u8,
+                            color: 0,
+                            bg_over_obj: false,
+                            palette: registers.obp0,
+                        });
+                    }
+
+                    let mut pixels = VecDeque::<SpritePixel>::with_capacity(8);
+
+                    let mut insert_pixel = |pixel: u8, i: usize| {
+                        pixels.push_back(SpritePixel {
+                            x: x + i as u8,
+                            color: pixel,
+                            bg_over_obj: attributes & (1 << 7) != 0,
+                            palette: if attributes & (1 << 4) == 0 {
+                                registers.obp0
+                            } else {
+                                registers.obp1
+                            },
+                        });
+                    };
+
+                    let flip_sprite_h = attributes & (1 << 5) != 0;
+                    if flip_sprite_h {
+                        for i in 0..=7 {
+                            let pixel = (((tile_byte_hi >> i) & 1) << 1) | (tile_byte_lo >> i & 1);
+
+                            insert_pixel(pixel, i);
+                        }
+                    } else {
+                        for i in 0..=7 {
+                            let pixel = (((tile_byte_hi >> (7 - i)) & 1) << 1) | (tile_byte_lo >> (7 - i) & 1);
+
+                            insert_pixel(pixel, i);
+                        }
+                    }
+
+                    let start_index = self.obj_fifo.iter().position(|s| s.x == pixels[0].x);
+
+                    if let Some(mut index) = start_index {
+                        while index < 8 {
+                            match self.obj_fifo.get(index) {
+                                Some(s) if s.color == 0 => {
+                                    let item = self.obj_fifo.index_mut(index);
+                                    *item = pixels.pop_front().unwrap();
+                                }
+                                None => {
+                                    let item = self.obj_fifo.index_mut(index);
+                                    *item = pixels.pop_front().unwrap();
+                                }
+                                _ => {}
+                            }
+
+                            index += 1;
+                        }
+                    }
+
+                    self.state = Sleep;
+                } else if self.bg_fifo.is_empty() {
+                    for i in 0..=7 {
+                        let pixel = (((tile_byte_hi >> (7 - i)) & 1) << 1) | (tile_byte_lo >> (7 - i) & 1);
+
+                        self.bg_fifo.push_back(pixel);
+                    }
+
+                    self.state = Sleep;
+                }
+            }
+        }
+    }
+
+    pub fn fetch_bg_tile(&mut self, tile_map_addr: u16) {
+        self.dot_counter = 0;
+        self.state = GetTileId;
+        self.mode = Background { tile_address: tile_map_addr };
+    }
+
+    pub fn fetch_window_tile(&mut self, tile_map_addr: u16) {
+        self.bg_fifo.clear();
+
+        self.dot_counter = 0;
+        self.state = GetTileId;
+        self.mode = Window { tile_address: tile_map_addr };
+    }
+
+    pub fn fetch_obj_tile(&mut self, oam: &Oam) {
+        self.dot_counter = 0;
+        self.state = GetTileId;
+        self.mode = Object {
+            x: oam.x,
+            y: oam.y,
+            attributes: oam.attributes,
+            tile_index: oam.tile_index,
+        };
+    }
+}
+
 struct SpritePixel {
+    pub x: u8,
     pub color: u8,
     pub palette: u8,
     pub bg_over_obj: bool,
@@ -59,7 +287,7 @@ struct Oam {
     pub x: u8,
     pub tile_index: u8,
     pub attributes: u8,
-    oam_address: u16,
+    oam_index: u8,
 }
 
 pub struct Vram {
@@ -102,6 +330,8 @@ pub struct Ppu {
     scanline_x: u8,
     sprites: Vec<Oam>,
     pub screen: [u8; 160 * 144],
+    pixel_fetcher: PixelFetcher,
+    delay: usize,
 }
 
 impl Ppu {
@@ -112,6 +342,8 @@ impl Ppu {
             scanline_x: 0,
             sprites: Vec::with_capacity(10),
             screen: [0; 160 * 144],
+            pixel_fetcher: PixelFetcher::new(),
+            delay: 0,
         }
     }
 
@@ -136,184 +368,176 @@ impl Ppu {
 
         let mut mode = registers.stat & 0b0000_0011;
 
-        if registers.ly >= 144 {
-            if registers.ly == 144 {
-                mode = 1;
+        let line_dot = self.dot_counter % 456;
 
-                if lcd_enable {
-                    registers.interrupt_flag.insert(InterruptFlags::VBLANK);
+        let bg_enable = registers.lcdc.contains(LCDControl::BG_WINDOW_ENABLE);
 
-                    // According to The Cycle-Accurate Game Boy Docs, OAM bit also triggers the interrupt on VBlank.
-                    if registers.stat & (1 << 4) != 0 || registers.stat & (1 << 5) != 0 {
-                        registers.interrupt_flag.insert(InterruptFlags::LCD_STAT);
-                    }
-                }
-            }
+        let window_enable = registers.lcdc.contains(LCDControl::WINDOW_ENABLE) && registers.wx < 167 && registers.wy < 144;
+        let is_window_scanline = window_enable && registers.ly >= registers.wy && registers.ly < registers.wy.wrapping_add(144);
 
-            registers.ly = (self.dot_counter / 456) as u8;
+        let sprite_16 = registers.lcdc.contains(LCDControl::OBJ_SIZE);
+        let sprite_height: u8 = if sprite_16 {
+            16
         } else {
-            let line_dot = self.dot_counter % 456;
+            8
+        };
 
-            let window_enable = registers.lcdc.contains(LCDControl::WINDOW_ENABLE) && registers.wx < 167 && registers.wy < 144;
-            let is_window_scanline = window_enable && registers.ly >= registers.wy && registers.ly < registers.wy.wrapping_add(144);
+        match mode {
+            0 => {
+                if line_dot == 0 {
+                    if registers.ly == 144 {
+                        mode = 1;
 
-            let sprite_16 = registers.lcdc.contains(LCDControl::OBJ_SIZE);
-            let sprite_height: u8 = if sprite_16 {
-                16
-            } else {
-                8
-            };
+                        if lcd_enable {
+                            registers.interrupt_flag.insert(InterruptFlags::VBLANK);
 
-            if line_dot == 0 {
-                mode = 2;
-
-                if lcd_enable && registers.stat & (1 << 5) != 0 {
-                    registers.interrupt_flag.insert(InterruptFlags::LCD_STAT);
-                }
-            }
-
-            if line_dot == 80 {
-                mode = 3;
-
-                self.sprites.clear();
-                self.fetch_sprites(registers, sprite_height);
-            }
-
-            if mode == 3 {
-                let sprites_enable = registers.lcdc.contains(LCDControl::OBJ_ENABLE);
-
-                let is_window_tile = is_window_scanline && (self.scanline_x + 7) >= registers.wx && (self.scanline_x + 7) <= registers.wx.saturating_add(159);
-
-                let (tile_offset_x, tile_pixel_offset_y) = if is_window_tile {
-                    (
-                        (self.scanline_x + 7).wrapping_sub(registers.wx) / 8,
-                        registers.window_ly
-                    )
-                } else {
-                    (
-                        (registers.scx.wrapping_add(self.scanline_x) / 8) & 0x1f,
-                        registers.ly.wrapping_add(registers.scy)
-                    )
-                };
-
-                let mut tile_map_addr: u16 = 0x9800;
-
-                // When LCDC.3 is enabled and the X coordinate of the current scanline is not inside the window then tilemap $9C00 is used.
-                // When LCDC.6 is enabled and the X coordinate of the current scanline is inside the window then tilemap $9C00 is used.
-                if registers.lcdc.contains(LCDControl::BG_TILEMAP_AREA) && !is_window_tile ||
-                    registers.lcdc.contains(LCDControl::WINDOW_TILEMAP_AREA) && is_window_tile {
-                    tile_map_addr = 0x9c00;
-                }
-
-                let tile_addr = tile_map_addr + (tile_pixel_offset_y / 8) as u16 * 32 + tile_offset_x as u16;
-                let tile_index = self.vram.mem_read(tile_addr);
-
-                let (tile_byte_lo, tile_byte_hi) = fetch_tile_bytes(&self.vram, registers, tile_index, tile_pixel_offset_y);
-
-                let pixel_offset = if is_window_tile {
-                    (self.scanline_x + 7).wrapping_sub(registers.wx) % 8
-                } else {
-                    registers.scx.wrapping_add(self.scanline_x) % 8
-                };
-
-                let bg_pixel = (((tile_byte_hi >> (7 - pixel_offset)) & 1) << 1) | (tile_byte_lo >> (7 - pixel_offset) & 1);
-
-                // The following is performed for each sprite on the current scanline if LCDC.1 is enabled 
-                // (this condition is ignored on CGB) and the X coordinate of the current scanline has a sprite on it. 
-                // If those conditions are not met then sprite fetching is aborted.
-                let mut sprite_pixel: Option<SpritePixel> = None;
-
-                if sprites_enable {
-                    let is_sprite_on_scanline_pixel = |s: &Oam| self.scanline_x + 8 >= s.x && self.scanline_x < s.x;
-
-                    if self.sprites.iter().any(is_sprite_on_scanline_pixel) {
-                        self.sprites.sort_by(|a, b| match a.x.cmp(&b.x) {
-                            Ordering::Equal => a.oam_address.cmp(&b.oam_address),
-                            ord => ord
-                        });
-
-                        for sprite in self.sprites.iter() {
-                            if !is_sprite_on_scanline_pixel(sprite) {
-                                continue;
+                            // According to The Cycle-Accurate Game Boy Docs, OAM bit also triggers the interrupt on VBlank.
+                            if registers.stat & (1 << 4) != 0 || registers.stat & (1 << 5) != 0 {
+                                registers.interrupt_flag.insert(InterruptFlags::LCD_STAT);
                             }
+                        }
+                    } else {
+                        mode = 2;
 
-                            let flip_sprite_v = sprite.attributes & (1 << 6) != 0;
-                            let flip_sprite_h = sprite.attributes & (1 << 5) != 0;
-
-                            let (tile_index, tile_row_offset) = if sprite_16 {
-                                let tile_index = match (flip_sprite_v, registers.ly + 16 - sprite.y < 8) {
-                                    (true, true) | (false, false) => sprite.tile_index | 0x01,
-                                    _ => sprite.tile_index & 0xfe,
-                                };
-
-                                let tile_row_offset = (registers.ly + sprite_height - sprite.y) % 8;
-
-                                (tile_index, tile_row_offset)
-                            } else {
-                                (
-                                    sprite.tile_index,
-                                    ((sprite.y as isize - 16 + registers.ly as isize) % 8) as u8
-                                )
-                            };
-
-
-                            let tile_row_offset = if flip_sprite_v {
-                                7 - tile_row_offset
-                            } else {
-                                tile_row_offset
-                            };
-
-                            let sprite_tile_byte_lo_addr = self.vram.mem_read(0x8000 + tile_index as u16 * 16 + tile_row_offset as u16 * 2 + 0);
-                            let sprite_tile_byte_hi_addr = self.vram.mem_read(0x8000 + tile_index as u16 * 16 + tile_row_offset as u16 * 2 + 1);
-
-                            let pixel_offset = self.scanline_x + 8 - sprite.x;
-                            let pixel_offset = if flip_sprite_h {
-                                pixel_offset
-                            } else {
-                                7 - pixel_offset
-                            };
-
-                            let color = (((sprite_tile_byte_hi_addr >> pixel_offset) & 1) << 1) | (sprite_tile_byte_lo_addr >> pixel_offset & 1);
-
-                            if color == 0 {
-                                continue;
-                            }
-
-                            sprite_pixel = Some(SpritePixel {
-                                color,
-                                bg_over_obj: sprite.attributes & (1 << 7) != 0,
-                                palette: if sprite.attributes & (1 << 4) == 0 {
-                                    registers.obp0
-                                } else {
-                                    registers.obp1
-                                },
-                            });
-
-                            break;
+                        if lcd_enable && registers.stat & (1 << 5) != 0 {
+                            registers.interrupt_flag.insert(InterruptFlags::LCD_STAT);
                         }
                     }
                 }
+            }
+            1 => {
+                if self.dot_counter == 0 {
+                    mode = 2;
+                }
+                
+                registers.ly = (self.dot_counter / 456) as u8;
+            }
+            2 => {
+                self.fetch_sprites(registers, sprite_height, line_dot);
 
-                let bg_enable = registers.lcdc.contains(LCDControl::BG_WINDOW_ENABLE);
+                if line_dot == 80 {
+                    mode = 3;
 
-                let mut final_pixel = registers.bgp & 0b0000_0011;
+                    self.pixel_fetcher.bg_fifo.clear();
+                    self.pixel_fetcher.obj_fifo.clear();
 
-                if lcd_enable && bg_enable {
-                    final_pixel = registers.bgp >> (bg_pixel * 2) & 0b0000_0011;
+                    self.sprites.sort_by(|a, b| match a.x.cmp(&b.x) {
+                        Ordering::Equal => a.oam_index.cmp(&b.oam_index),
+                        ord => ord
+                    });
+                }
+            }
+            3 => {
+                self.pixel_fetcher.tick(&self.vram, &registers);
+
+                if self.delay > 0 {
+                    self.delay -= 1;
+
+                    return false;
+                }
+                
+                if self.pixel_fetcher.bg_fifo.is_empty() && matches!(self.pixel_fetcher.state, Sleep) {
+                    self.fetch_bg_pixels(&registers, is_window_scanline);
+
+                    return false;
+                }
+
+                let sprites_enable = registers.lcdc.contains(LCDControl::OBJ_ENABLE);
+                if sprites_enable {
+                    // TODO: The following is performed for each sprite on the current scanline if LCDC.1 is enabled and the X coordinate of the current scanline has a sprite on it. (?) 
+                    //  If those conditions are not met then sprite fetching is aborted.
+
+                    // TODO: At this point the fetcher is advanced one step until it's at step 5 or until the background FIFO is not empty. (?) 
+                    // Advancing the fetcher one step here lengthens mode 3 by 1 dot. This process may be aborted after the fetcher has advanced a step.
+                    if self.sprites.iter().any(|s| self.scanline_x + 8 == s.x) && matches!(self.pixel_fetcher.state, Sleep) {
+                        self.fetch_obj_pixels(&registers);
+
+                        return false;
+                    }
+
+                    // After checking for sprites at X coordinate 0 the fetcher is advanced two steps. 
+                    // The first advancement lengthens mode 3 by 1 dot and the second advancement lengthens mode 3 by 3 dots. 
+                    // After each fetcher advancement there is a chance for a sprite fetch abortion to occur.
+
+                    // The lower address for the row of pixels of the target object tile is now retrieved and lengthens mode 3 by 1 dot.
+                    // Once the address is retrieved this is the last chance for sprite fetch abortion to occur. 
+                    // Exiting object fetch lengthens mode 3 by 1 dot.
+                    // The upper address for the target object tile is now retrieved and does not shorten mode 3.
+
+                    // Before any mixing is done, if the OAM FIFO doesn't have at least 8 pixels in it then transparent pixels with the lowest priority are pushed onto the OAM FIFO.
+                    // let mut i = 0;
+                    // while self.pixel_fetcher.obj_fifo.len() < 8 {
+                    //     self.pixel_fetcher.obj_fifo.push_back(SpritePixel {
+                    //         x: self.scanline_x + i,
+                    //         color: 0,
+                    //         bg_over_obj: false,
+                    //         palette: registers.obp0,
+                    //     });
+                    // 
+                    //     i += 1;
+                    // }
+                }
+
+                let bg_pixel = self.pixel_fetcher.bg_fifo.pop_front();
+                
+                let skip = registers.scx % 8;
+                if self.scanline_x == 0 && skip > 0 {
+                    if self.pixel_fetcher.bg_fifo.len() >= (8 - skip) as usize {
+                        return false;
+                    }
+                }
+
+                // When SCX & 7 > 0 and there is a sprite at X coordinate 0 of the current scanline then mode 3 is lengthened.
+                // The amount of dots this lengthens mode 3 by is whatever the lower 3 bits of SCX are. 
+                // TODO: After this penalty is applied object fetching may be aborted.
+                // if self.scanline_x == 0 && registers.scx & 7 > 0 && self.sprites.iter().any(|s| s.x == 0) {
+                //     self.delay += (registers.scx & 7) as usize;
+                // 
+                //     return false;
+                // }
+
+                // Now it's time to render a pixel!
+                // The same process described in Sprite Fetch Abortion is performed: a pixel is rendered and the fetcher is advanced one step.
+                // This advancement lengthens mode 3 by 1 dot if the X coordinate of the current scanline is not 160.
+                // If the X coordinate is 160 the PPU stops processing sprites (because they won't be visible).
+
+                if bg_pixel.is_none() {
+                    return false;
+                }
+
+                let bg_pixel = bg_pixel.unwrap();
+
+                if bg_pixel != 0 {
+                    let x = 1;
+                }
+
+                let sprite_pixel = self.pixel_fetcher.obj_fifo.pop_front();
+
+                let mut pixel = 0;
+                let mut palette = registers.bgp;
+
+                if bg_enable {
+                    pixel = bg_pixel;
                 }
 
                 if let Some(sprite_pixel) = sprite_pixel {
-                    let color = (sprite_pixel.palette >> (sprite_pixel.color * 2)) & 0b0000_0011;
-
-                    if lcd_enable && sprites_enable {
-                        if sprite_pixel.bg_over_obj && bg_pixel != 0 {} else if sprite_pixel.color != 0 {
-                            final_pixel = color;
+                    if !bg_enable {
+                        pixel = sprite_pixel.color;
+                        palette = sprite_pixel.palette;
+                    } else if sprites_enable {
+                        if sprite_pixel.bg_over_obj && bg_pixel != 0 || sprite_pixel.color == 0 {
+                            pixel = bg_pixel;
+                        } else {
+                            pixel = sprite_pixel.color;
+                            palette = sprite_pixel.palette;
                         }
                     }
                 }
 
-                if self.scanline_x < 160 {
-                    self.screen[registers.ly as usize * 160 + self.scanline_x as usize] = 255 - final_pixel * 64;
+                if self.scanline_x < 160 && registers.ly < 144 {
+                    let color = (palette >> (pixel * 2)) & 0b0000_0011;
+
+                    self.screen[registers.ly as usize * 160 + self.scanline_x as usize] = 255 - color * 64;
 
                     self.scanline_x = (self.scanline_x + 1) % 160;
 
@@ -331,11 +555,12 @@ impl Ppu {
 
                             registers.ly += 1;
                         }
-                        
+
                         // result = true;
                     }
                 }
             }
+            _ => unreachable!()
         }
 
         if lcd_enable {
@@ -358,24 +583,88 @@ impl Ppu {
         return result;
     }
 
-    fn fetch_sprites(&mut self, registers: &mut IoRegisters, sprite_height: u8) {
-        for sprite_addr in (0xfe00..=0xfe9f).step_by(4) {
-            let ly = registers.ly;
-            let sprite_y = self.vram.mem_read(sprite_addr);
+    fn fetch_sprites(&mut self, registers: &mut IoRegisters, sprite_height: u8, line_dot: usize) {
+        if line_dot % 2 == 0 {
+            return;
+        }
 
-            if sprite_y <= ly + 16 && ly + 16 - sprite_height < sprite_y {
-                self.sprites.push(Oam {
-                    oam_address: sprite_addr,
-                    y: sprite_y,
-                    x: self.vram.mem_read(sprite_addr + 1),
-                    tile_index: self.vram.mem_read(sprite_addr + 2),
-                    attributes: self.vram.mem_read(sprite_addr + 3),
-                });
+        if self.sprites.len() == self.sprites.capacity() {
+            return;
+        }
+
+        let ly = registers.ly;
+
+        let oam_addr = 0xfe00 + (line_dot as u16 / 2) * 4;
+        let sprite_y = self.vram.mem_read(oam_addr);
+
+        if sprite_y <= ly + 16 && ly + 16 - sprite_height < sprite_y {
+            self.sprites.push(Oam {
+                oam_index: line_dot as u8 / 2,
+                y: sprite_y,
+                x: self.vram.mem_read(oam_addr + 1),
+                tile_index: self.vram.mem_read(oam_addr + 2),
+                attributes: self.vram.mem_read(oam_addr + 3),
+            });
+        }
+    }
+    fn fetch_bg_pixels(&mut self, registers: &IoRegisters, is_window_scanline: bool) {
+        let is_window_tile = is_window_scanline && (self.scanline_x + 7) >= registers.wx && (self.scanline_x + 7) <= registers.wx.saturating_add(159);
+
+        let tile_map_addr = if is_window_tile {
+            let bit_10: u16 = if registers.lcdc.contains(LCDControl::WINDOW_TILEMAP_AREA) { 1 } else { 0 };
+            let offset_y = registers.window_ly as u16 / 8;
+            let offset_x = (self.scanline_x + 7).wrapping_sub(registers.wx) as u16 / 8;
+
+            0b1001_1000_0000_0000 | (bit_10 << 10) | offset_y << 5 | offset_x
+        } else {
+            let bit_10: u16 = if registers.lcdc.contains(LCDControl::BG_TILEMAP_AREA) { 1 } else { 0 };
+            let offset_y = registers.ly.wrapping_add(registers.scy) as u16 / 8;
+            let offset_x = self.scanline_x.wrapping_add(registers.scx) as u16 / 8;
+
+            0b1001_1000_0000_0000 | (bit_10 << 10) | offset_y << 5 | offset_x
+        };
+
+        if is_window_tile {
+            self.pixel_fetcher.fetch_window_tile(tile_map_addr);
+
+            // When WX is 0 and the SCX & 7 > 0 mode 3 is shortened by 1 dot.
+            if registers.wx == 0 && registers.scx & 7 > 0 {
+                // self.target_mode3_count -= 1;
+            }
+        } else {
+            self.pixel_fetcher.fetch_bg_tile(tile_map_addr);
+        }
+    }
+
+    fn fetch_obj_pixels(&mut self, registers: &IoRegisters) {
+        if self.pixel_fetcher.bg_fifo.is_empty() || !matches!(self.pixel_fetcher.state, Sleep) {
+            return;
+        }
+
+        let sprite_16 = registers.lcdc.contains(LCDControl::OBJ_SIZE);
+
+
+        if let Some(index) = self.sprites.iter().position(|s| s.x == self.scanline_x + 8) {
+            let mut sprite = self.sprites.remove(index);
+
+            let flip_sprite_v = sprite.attributes & (1 << 6) != 0;
+            
+            if registers.ly == 96 && sprite.oam_index == 19 {
+                let  x = 1;
             }
 
-            if self.sprites.len() == self.sprites.capacity() {
-                break;
-            }
+            sprite.tile_index = if sprite_16 {
+                match (flip_sprite_v, registers.ly + 16 - sprite.y < 8) {
+                    (true, true) | (false, false) => sprite.tile_index | 0x01,
+                    _ => sprite.tile_index & 0xfe,
+                }
+            } else {
+                sprite.tile_index
+            };
+
+            self.pixel_fetcher.fetch_obj_tile(&sprite);
+
+            self.delay += 7;
         }
     }
 }

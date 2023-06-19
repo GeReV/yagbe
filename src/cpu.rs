@@ -87,8 +87,6 @@ impl Cpu {
         let m_cycles = self.handle_instruction();
 
         self.handle_timers(m_cycles);
-        
-        writeln!(self.logger, "{}", self.registers).unwrap();
 
         return m_cycles;
     }
@@ -99,11 +97,9 @@ impl Cpu {
         if self.halted {
             return m_cycles;
         }
-        
-        if self.registers.pc == 0x021c {
-            let x = 1;
-        }
 
+        writeln!(self.logger, "{}", self.registers).unwrap();
+        
         let instruction = self.read_u8();
 
         match instruction {
