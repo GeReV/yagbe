@@ -33,8 +33,8 @@ pub enum BankingMode {
 
 pub struct Bus {
     program: Vec<u8>,
-    pub bank0: [u8; 0x4000],
-    pub bank1: [u8; 0x4000],
+    pub rom_current_bank: u8,
+    pub rom_banks: Vec<[u8; 0x4000]>,
     pub banking_mode: BankingMode,
     pub cartridge_ram_size_type: u8,
     pub ram_enable: bool,
@@ -51,8 +51,8 @@ impl Bus {
     pub fn new() -> Self {
         Bus {
             program: Vec::new(),
-            bank0: [0; 0x4000],
-            bank1: [0; 0x4000],
+            rom_current_bank: 0,
+            rom_banks: Vec::with_capacity(0),
             banking_mode: Simple,
             cartridge_ram_size_type: 0,
             ram_enable: false,
@@ -73,6 +73,16 @@ impl Bus {
 
         let rom_size_type = program[OFFSET_ROM_SIZE];
         let rom_size_bytes: usize = 32 * 1024 * (1 << rom_size_type);
+        
+        let bank_count = rom_size_bytes / 0x4000;
+        
+        self.rom_banks = Vec::with_capacity(bank_count);
+        for i in 0..bank_count {
+            let mut bank: [u8; 0x4000] = [0; 0x4000];
+            bank.copy_from_slice(&program[(i * 0x4000)..=(i * 0x4000 + 0x3fff)]);
+            
+            self.rom_banks.push(bank);
+        }
 
         self.cartridge_ram_size_type = program[OFFSET_RAM_SIZE];
         
@@ -80,9 +90,6 @@ impl Bus {
         
         self.ram_banks = Vec::with_capacity(cartridge_ram_bytes_total / 0x2000);
         self.ram_banks.fill([0; 0x2000]);
-
-        self.bank0.copy_from_slice(&program[0x0000..=0x3fff]);
-        self.bank1.copy_from_slice(&program[0x4000..=0x7fff]);
 
         self.program = program;
     }
@@ -101,8 +108,8 @@ impl Bus {
 impl Mem for Bus {
     fn mem_read(&self, addr: u16) -> u8 {
         return match addr {
-            0x0000..=0x3fff => self.bank0[addr as usize],
-            0x4000..=0x7fff => self.bank1[(addr - 0x4000) as usize],
+            0x0000..=0x3fff => self.rom_banks[0][addr as usize],
+            0x4000..=0x7fff => self.rom_banks[self.rom_current_bank as usize][(addr - 0x4000) as usize],
             0x8000..=0x9fff => self.ppu.vram.mem_read(addr),
             0xa000..=0xbfff => {
                 let addr = (addr - 0xa000) as usize;
@@ -159,9 +166,7 @@ impl Mem for Bus {
                     };
                 }
 
-                let bank_offset = bank as usize * 0x4000;
-                
-                self.bank1.copy_from_slice(&self.program[bank_offset..=(bank_offset + 0x3fff)]);
+                self.rom_current_bank = bank;
             }
             0x4000..=0x5fff => {
                 if self.banking_mode == AdvancedRomOrRamBanking {
