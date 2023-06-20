@@ -16,6 +16,12 @@ const MCYCLE_DURATION: Duration = Duration::from_nanos((1e9 / 1.048576e6) as u64
 #[derive(Clone, Copy)]
 pub struct MCycles(usize);
 
+impl MCycles {
+    pub fn t_cycles(&self) -> usize {
+        self.0 * 4
+    }
+}
+
 impl std::ops::Add for MCycles {
     type Output = Self;
 
@@ -62,7 +68,7 @@ impl Cpu {
         
         loop {
             let m_cycles = self.execute();
-            let t_cycles = m_cycles.0 * 4;
+            let t_cycles = m_cycles.t_cycles();
 
             self.accumulator = self.accumulator.saturating_sub(MCYCLE_DURATION * m_cycles.0 as u32);
             
@@ -1057,7 +1063,7 @@ impl Cpu {
     }
 
     fn handle_timers(&mut self, m_cycles: MCycles) {
-        let t_cycles = m_cycles.0 * 4;
+        let t_cycles = m_cycles.t_cycles();
 
         self.bus.io_registers.cpu_clock = self.bus.io_registers.cpu_clock.wrapping_add(t_cycles as u16);
 
