@@ -21,6 +21,8 @@ by [@bugzmanov](https://github.com/bugzmanov/), to get a general idea of how an 
 
 #### Reference:
 - [Pan Docs](https://gbdev.github.io/pandocs/) - Used as the main reference for the entire console.
+- [Pan Docs Rendering Internals](https://github.com/gbdev/pandocs/blob/bbdc0ef79ba46dcc8183ad788b651ae25b52091d/src/Rendering_Internals.md) - No longer included in the full docs, but clarifies a few things about rendering.
+- [The Ultimate Game Boy Talk](https://media.ccc.de/v/33c3-8029-the_ultimate_game_boy_talk) by [Michael Steil](https://github.com/mist64) - Used mainly as another reference to understanding the Game Boy rendering.
 
 #### CPU
 - [gb-opcodes](https://gbdev.github.io/gb-opcodes/optables/) - Table of CPU instructions, arranged by their hex representation.
@@ -56,3 +58,10 @@ by [@bugzmanov](https://github.com/bugzmanov/), to get a general idea of how an 
    not properly implemented.  
    
    After fixing those issues, the emulator ran its first game roms with at least some success.
+4. Eventually rewrote the rendering subsystem to something that's closer to how the device works, 
+   using the Rendering Internals page (linked above) of the Pan Docs. 
+   
+   Since some things were still unclear, I went to watch the rendering part in The Ultimate Game Boy Talk (linked above).
+   
+   While it clarified even more bits about the topic, it seems more changes are required.
+   
