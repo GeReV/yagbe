@@ -143,7 +143,7 @@ impl PixelFetcher {
                         0b1000_0000_0000_0000 | (bit_12 << 12) | tile_index << 4 | ((registers.window_ly % 8) as u16) << 1
                     }
                     Object { y, attributes, .. } => {
-                        let mut row_offset = (registers.ly - y % 8) % 8;
+                        let mut row_offset = registers.ly.wrapping_sub(y % 8) % 8;
 
                         let flip_sprite_v = attributes & (1 << 6) != 0;
 
@@ -178,7 +178,7 @@ impl PixelFetcher {
                 if let Object { x, attributes, .. } = self.mode {
                     while self.obj_fifo.len() < 8 {
                         self.obj_fifo.push_back(SpritePixel {
-                            x: x + self.obj_fifo.len() as u8,
+                            x: x as isize - 8 + self.obj_fifo.len() as isize,
                             color: 0,
                             bg_over_obj: false,
                             palette: registers.obp0,
@@ -189,7 +189,7 @@ impl PixelFetcher {
 
                     let mut insert_pixel = |pixel: u8, i: usize| {
                         pixels.push_back(SpritePixel {
-                            x: x + i as u8,
+                            x: x as isize - 8 + i as isize,
                             color: pixel,
                             bg_over_obj: attributes & (1 << 7) != 0,
                             palette: if attributes & (1 << 4) == 0 {
@@ -250,6 +250,8 @@ impl PixelFetcher {
     }
 
     pub fn fetch_bg_tile(&mut self, tile_map_addr: u16) {
+        self.bg_fifo.clear();
+
         self.dot_counter = 0;
         self.state = GetTileId;
         self.mode = Background { tile_address: tile_map_addr };
@@ -276,7 +278,7 @@ impl PixelFetcher {
 }
 
 struct SpritePixel {
-    pub x: u8,
+    pub x: isize,
     pub color: u8,
     pub palette: u8,
     pub bg_over_obj: bool,
@@ -399,6 +401,8 @@ impl Ppu {
                     } else {
                         mode = 2;
 
+                        self.sprites.clear();
+
                         if lcd_enable && registers.stat & (1 << 5) != 0 {
                             registers.interrupt_flag.insert(InterruptFlags::LCD_STAT);
                         }
@@ -408,8 +412,10 @@ impl Ppu {
             1 => {
                 if self.dot_counter == 0 {
                     mode = 2;
+
+                    self.sprites.clear();
                 }
-                
+
                 registers.ly = (self.dot_counter / 456) as u8;
             }
             2 => {
@@ -435,7 +441,7 @@ impl Ppu {
 
                     return false;
                 }
-                
+
                 if self.pixel_fetcher.bg_fifo.is_empty() && matches!(self.pixel_fetcher.state, Sleep) {
                     self.fetch_bg_pixels(&registers, is_window_scanline);
 
@@ -447,9 +453,9 @@ impl Ppu {
                     // TODO: The following is performed for each sprite on the current scanline if LCDC.1 is enabled and the X coordinate of the current scanline has a sprite on it. (?) 
                     //  If those conditions are not met then sprite fetching is aborted.
 
-                    // TODO: At this point the fetcher is advanced one step until it's at step 5 or until the background FIFO is not empty. (?) 
+                    // At this point the fetcher is advanced one step until it's at step 5 or until the background FIFO is not empty. (Handled inside fetch_obj_pixels).
                     // Advancing the fetcher one step here lengthens mode 3 by 1 dot. This process may be aborted after the fetcher has advanced a step.
-                    if self.sprites.iter().any(|s| self.scanline_x + 8 == s.x) && matches!(self.pixel_fetcher.state, Sleep) {
+                    if self.sprites.iter().any(|s| self.scanline_x + 8 >= s.x && self.scanline_x < s.x) {
                         self.fetch_obj_pixels(&registers);
 
                         return false;
@@ -479,7 +485,7 @@ impl Ppu {
                 }
 
                 let bg_pixel = self.pixel_fetcher.bg_fifo.pop_front();
-                
+
                 let skip = registers.scx % 8;
                 if self.scanline_x == 0 && skip > 0 {
                     if self.pixel_fetcher.bg_fifo.len() >= (8 - skip) as usize {
@@ -507,12 +513,6 @@ impl Ppu {
 
                 let bg_pixel = bg_pixel.unwrap();
 
-                if bg_pixel != 0 {
-                    let x = 1;
-                }
-
-                let sprite_pixel = self.pixel_fetcher.obj_fifo.pop_front();
-
                 let mut pixel = 0;
                 let mut palette = registers.bgp;
 
@@ -520,7 +520,11 @@ impl Ppu {
                     pixel = bg_pixel;
                 }
 
-                if let Some(sprite_pixel) = sprite_pixel {
+                while let Some(sprite_pixel) = self.pixel_fetcher.obj_fifo.pop_front() {
+                    if sprite_pixel.x < self.scanline_x as isize { 
+                        continue;
+                    }
+                    
                     if !bg_enable {
                         pixel = sprite_pixel.color;
                         palette = sprite_pixel.palette;
@@ -532,12 +536,14 @@ impl Ppu {
                             palette = sprite_pixel.palette;
                         }
                     }
+                    
+                    break;
                 }
 
                 if self.scanline_x < 160 && registers.ly < 144 {
                     let color = (palette >> (pixel * 2)) & 0b0000_0011;
 
-                    self.screen[registers.ly as usize * 160 + self.scanline_x as usize] = 255 - color * 64;
+                    self.screen[registers.ly as usize * 160 + self.scanline_x as usize] = color;
 
                     self.scanline_x = (self.scanline_x + 1) % 160;
 
@@ -643,15 +649,10 @@ impl Ppu {
 
         let sprite_16 = registers.lcdc.contains(LCDControl::OBJ_SIZE);
 
-
-        if let Some(index) = self.sprites.iter().position(|s| s.x == self.scanline_x + 8) {
+        if let Some(index) = self.sprites.iter().position(|s| self.scanline_x + 8 >= s.x && self.scanline_x < s.x) {
             let mut sprite = self.sprites.remove(index);
 
             let flip_sprite_v = sprite.attributes & (1 << 6) != 0;
-            
-            if registers.ly == 96 && sprite.oam_index == 19 {
-                let  x = 1;
-            }
 
             sprite.tile_index = if sprite_16 {
                 match (flip_sprite_v, registers.ly + 16 - sprite.y < 8) {
