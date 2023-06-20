@@ -1,5 +1,6 @@
 ﻿use std::io::LineWriter;
 use std::io::Write;
+use std::time::Duration;
 pub use bitflags::Flags;
 use crate::Mem;
 use crate::bus::Bus;
@@ -9,6 +10,8 @@ use crate::io_registers::InterruptFlags;
 fn invalid_instruction() {
     // panic!("invalid instruction")
 }
+
+const MCYCLE_DURATION: Duration = Duration::from_nanos((1e9 / 1.048576e6) as u64);
 
 #[derive(Clone, Copy)]
 pub struct MCycles(usize);
@@ -22,9 +25,10 @@ impl std::ops::Add for MCycles {
 }
 
 pub struct Cpu {
+    pub bus: Bus,
+    accumulator: Duration,
     interrupts_master_enable: bool,
     registers: CpuRegisters,
-    pub bus: Bus,
     halted: bool,
     logger: LineWriter<std::fs::File>,
 }
@@ -32,11 +36,12 @@ pub struct Cpu {
 impl Cpu {
     pub fn new(writer: LineWriter<std::fs::File>) -> Self {
         Self {
+            bus: Bus::new(),
             interrupts_master_enable: true,
             registers: Default::default(),
-            bus: Bus::new(),
             halted: false,
             logger: writer,
+            accumulator: Duration::ZERO,
         }
     }
 
@@ -52,15 +57,25 @@ impl Cpu {
         }
     }
 
-    pub fn run_to_frame(&mut self) {
-        'frame: loop {
+    pub fn run_to_frame(&mut self, time_budget: Duration) -> bool {
+        self.accumulator += time_budget;
+        
+        loop {
             let m_cycles = self.execute();
             let t_cycles = m_cycles.0 * 4;
+
+            self.accumulator = self.accumulator.saturating_sub(MCYCLE_DURATION * m_cycles.0 as u32);
             
-            for _ in 0..t_cycles * 2 {
+            for _ in 0..t_cycles {
                 if self.bus.ppu.tick(&mut self.bus.io_registers) {
-                    break 'frame;
+                    return true;
                 }
+            }
+            
+            self.bus.apu.tick(&self.bus.io_registers);
+            
+            if self.accumulator.is_zero() {
+                return false;
             }
         }
     }
@@ -98,7 +113,7 @@ impl Cpu {
             return m_cycles;
         }
 
-        writeln!(self.logger, "{}", self.registers).unwrap();
+        // writeln!(self.logger, "{}", self.registers).unwrap();
         
         let instruction = self.read_u8();
 
