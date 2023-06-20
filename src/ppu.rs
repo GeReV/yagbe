@@ -36,22 +36,6 @@ use crate::ppu::PixelFetcherState::{GetTileId, GetTileRowHigh, GetTileRowLow, Pu
 /// $FF68	$FF69	CGB	            BG / OBJ Palettes
 /// $FF70		    CGB	            WRAM Bank Select
 
-fn fetch_tile_bytes(vram: &Vram, registers: &IoRegisters, tile_index: u8, pixel_offset_y: u8) -> (u8, u8) {
-    let tile_data_area = registers.lcdc.contains(LCDControl::BG_TILEDATA_AREA);
-    let tile_vram_addr: u16 = match (tile_data_area, tile_index) {
-        (true, _) => 0x8000 + (tile_index as u16 * 16),
-        (false, 0..=127) => 0x9000 + (tile_index as u16 * 16),
-        (false, 128..=255) => 0x8800 + ((tile_index - 128) as u16 * 16),
-        _ => unreachable!()
-    };
-
-    let tile_vram_y_offset = pixel_offset_y as u16 % 8;
-    let tile_byte_lo = vram.mem_read(tile_vram_addr + tile_vram_y_offset * 2 + 0);
-    let tile_byte_hi = vram.mem_read(tile_vram_addr + tile_vram_y_offset * 2 + 1);
-
-    (tile_byte_lo, tile_byte_hi)
-}
-
 enum PixelFetcherState {
     Sleep,
     GetTileId,
