@@ -54,6 +54,7 @@ enum PixelFetcherState {
 
 enum PixelFetcherMode {
     Background {
+        x: u8,
         tile_address: u16,
     },
     Window {
@@ -71,7 +72,7 @@ struct PixelFetcher {
     dot_counter: usize,
     pub state: PixelFetcherState,
     mode: PixelFetcherMode,
-    bg_fifo: VecDeque<u8>,
+    bg_fifo: VecDeque<BgPixel>,
     obj_fifo: VecDeque<SpritePixel>,
 }
 
@@ -80,10 +81,21 @@ impl PixelFetcher {
         Self {
             dot_counter: 0,
             state: Sleep,
-            mode: Background { tile_address: 0x9800 },
-            bg_fifo: VecDeque::with_capacity(8),
+            mode: Background { tile_address: 0x9800, x: 0 },
+            bg_fifo: VecDeque::with_capacity(16),
             obj_fifo: VecDeque::with_capacity(8),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bg_fifo.len() <= 8
+    }
+
+    pub fn clear(&mut self) {
+        self.state = Sleep;
+
+        self.bg_fifo.clear();
+        self.obj_fifo.clear();
     }
 
     pub fn tick(&mut self, vram: &Vram, registers: &IoRegisters) {
@@ -97,7 +109,7 @@ impl PixelFetcher {
                 }
 
                 let tile_index = match self.mode {
-                    Background { tile_address } => vram.mem_read(tile_address),
+                    Background { tile_address, .. } => vram.mem_read(tile_address),
                     Window { tile_address } => vram.mem_read(tile_address),
                     Object { tile_index, .. } => tile_index
                 };
@@ -159,29 +171,42 @@ impl PixelFetcher {
                 };
             }
             PushPixels { tile_byte_lo, tile_byte_hi } => {
-                if let Object { x, attributes, .. } = self.mode {
+                if let Object { x, attributes, tile_index, .. } = self.mode {
                     while self.obj_fifo.len() < 8 {
+                        let current_bg_pixel = self.bg_fifo.get(self.obj_fifo.len()).unwrap();
+
                         self.obj_fifo.push_back(SpritePixel {
-                            x: x as isize - 8 + self.obj_fifo.len() as isize,
+                            x: current_bg_pixel.x,
                             color: 0,
                             bg_over_obj: false,
                             palette: registers.obp0,
                         });
                     }
+                    
+                    let mut obj_pixel_index = 0;
 
-                    let mut pixels = VecDeque::<SpritePixel>::with_capacity(8);
+                    let mut insert_pixel = |color: u8, i: usize| {
+                        let x = x as isize - 8 + i as isize;
+                        
+                        if x < 0 {
+                            return;
+                        }
 
-                    let mut insert_pixel = |pixel: u8, i: usize| {
-                        pixels.push_back(SpritePixel {
-                            x: x as isize - 8 + i as isize,
-                            color: pixel,
-                            bg_over_obj: attributes & (1 << 7) != 0,
-                            palette: if attributes & (1 << 4) == 0 {
-                                registers.obp0
-                            } else {
-                                registers.obp1
-                            },
-                        });
+                        let existing_pixel = self.obj_fifo.get_mut(obj_pixel_index).unwrap();
+                        if existing_pixel.color == 0 {
+                            *existing_pixel = SpritePixel {
+                                x,
+                                color,
+                                bg_over_obj: attributes & (1 << 7) != 0,
+                                palette: if attributes & (1 << 4) == 0 {
+                                    registers.obp0
+                                } else {
+                                    registers.obp1
+                                },
+                            };
+                        }
+
+                        obj_pixel_index += 1;
                     };
 
                     let flip_sprite_h = attributes & (1 << 5) != 0;
@@ -199,32 +224,19 @@ impl PixelFetcher {
                         }
                     }
 
-                    let start_index = self.obj_fifo.iter().position(|s| s.x == pixels[0].x);
-
-                    if let Some(mut index) = start_index {
-                        while index < 8 {
-                            match self.obj_fifo.get(index) {
-                                Some(s) if s.color == 0 => {
-                                    let item = self.obj_fifo.index_mut(index);
-                                    *item = pixels.pop_front().unwrap();
-                                }
-                                None => {
-                                    let item = self.obj_fifo.index_mut(index);
-                                    *item = pixels.pop_front().unwrap();
-                                }
-                                _ => {}
-                            }
-
-                            index += 1;
-                        }
-                    }
-
                     self.state = Sleep;
-                } else if self.bg_fifo.is_empty() {
+                } else if self.is_empty() {
                     for i in 0..=7 {
-                        let pixel = (((tile_byte_hi >> (7 - i)) & 1) << 1) | (tile_byte_lo >> (7 - i) & 1);
+                        let color = (((tile_byte_hi >> (7 - i)) & 1) << 1) | (tile_byte_lo >> (7 - i) & 1);
 
-                        self.bg_fifo.push_back(pixel);
+                        let x = if let Background { x, .. } = self.mode {
+                            x
+                        } else { 0 };
+
+                        self.bg_fifo.push_back(BgPixel {
+                            x: x as isize + i as isize,
+                            color,
+                        });
                     }
 
                     self.state = Sleep;
@@ -233,16 +245,20 @@ impl PixelFetcher {
         }
     }
 
-    pub fn fetch_bg_tile(&mut self, tile_map_addr: u16) {
-        self.bg_fifo.clear();
+    pub fn fetch_bg_tile(&mut self, x: u8, tile_map_addr: u16) {
+        if matches!(self.mode, Window {..}) {
+            self.bg_fifo.clear();
+        }
 
         self.dot_counter = 0;
         self.state = GetTileId;
-        self.mode = Background { tile_address: tile_map_addr };
+        self.mode = Background { x, tile_address: tile_map_addr };
     }
 
     pub fn fetch_window_tile(&mut self, tile_map_addr: u16) {
-        self.bg_fifo.clear();
+        if matches!(self.mode, Background {..}) {
+            self.bg_fifo.clear();
+        }
 
         self.dot_counter = 0;
         self.state = GetTileId;
@@ -266,6 +282,11 @@ struct SpritePixel {
     pub color: u8,
     pub palette: u8,
     pub bg_over_obj: bool,
+}
+
+struct BgPixel {
+    pub x: isize,
+    pub color: u8,
 }
 
 struct Oam {
@@ -313,11 +334,11 @@ impl Mem for Vram {
 pub struct Ppu {
     pub dot_counter: usize,
     pub vram: Vram,
-    scanline_x: u8,
     sprites: Vec<Oam>,
     pub screen: [u8; 160 * 144],
+    screen_x: u8,
+    fetch_x: u8,
     pixel_fetcher: PixelFetcher,
-    delay: usize,
 }
 
 impl Ppu {
@@ -325,11 +346,11 @@ impl Ppu {
         Ppu {
             dot_counter: 0,
             vram: Vram::new(),
-            scanline_x: 0,
             sprites: Vec::with_capacity(10),
             screen: [0; 160 * 144],
+            screen_x: 0,
+            fetch_x: 0,
             pixel_fetcher: PixelFetcher::new(),
-            delay: 0,
         }
     }
 
@@ -342,6 +363,29 @@ impl Ppu {
             registers.stat = registers.stat & 0b1111_1000;
         }
 
+        if let Ok(mode) = self.handle_step(registers, lcd_enable) {
+            registers.stat = (registers.stat & 0b1111_1100) | (mode & 0b0000_0011);
+        };
+
+        if lcd_enable {
+            self.dot_counter += 1;
+        }
+
+        if self.dot_counter == 70224 {
+            self.dot_counter = 0;
+
+            result = true;
+
+            registers.ly = 0;
+            registers.window_ly = 0;
+
+            registers.interrupt_flag.remove(InterruptFlags::VBLANK | InterruptFlags::LCD_STAT);
+        }
+
+        return result;
+    }
+
+    fn handle_step(&mut self, registers: &mut IoRegisters, lcd_enable: bool) -> Result<u8, ()> {
         if registers.lyc == registers.ly {
             if lcd_enable && registers.stat & (1 << 2) == 0 && registers.stat & (1 << 6) != 0 {
                 registers.interrupt_flag.insert(InterruptFlags::LCD_STAT);
@@ -349,7 +393,7 @@ impl Ppu {
 
             registers.stat = registers.stat | (1 << 2);
         } else {
-            registers.stat = registers.stat & 0b1111_1011;
+            registers.stat = registers.stat & !(1 << 2);
         }
 
         let mut mode = registers.stat & 0b0000_0011;
@@ -357,6 +401,7 @@ impl Ppu {
         let line_dot = self.dot_counter % 456;
 
         let bg_enable = registers.lcdc.contains(LCDControl::BG_WINDOW_ENABLE);
+        let sprites_enable = registers.lcdc.contains(LCDControl::OBJ_ENABLE);
 
         let window_enable = registers.lcdc.contains(LCDControl::WINDOW_ENABLE) && registers.wx < 167 && registers.wy < 144;
         let is_window_scanline = window_enable && registers.ly >= registers.wy && registers.ly < registers.wy.wrapping_add(144);
@@ -382,7 +427,7 @@ impl Ppu {
                                 registers.interrupt_flag.insert(InterruptFlags::LCD_STAT);
                             }
                         }
-                    } else {
+                    } else if registers.ly < 144 {
                         mode = 2;
 
                         self.sprites.clear();
@@ -408,8 +453,10 @@ impl Ppu {
                 if line_dot == 80 {
                     mode = 3;
 
-                    self.pixel_fetcher.bg_fifo.clear();
-                    self.pixel_fetcher.obj_fifo.clear();
+                    self.fetch_x = 0;
+                    self.screen_x = 0;
+
+                    self.pixel_fetcher.clear();
 
                     self.sprites.sort_by(|a, b| match a.x.cmp(&b.x) {
                         Ordering::Equal => a.oam_index.cmp(&b.oam_index),
@@ -418,120 +465,69 @@ impl Ppu {
                 }
             }
             3 => {
+                if self.pixel_fetcher.is_empty() && matches!(self.pixel_fetcher.state, Sleep) {
+                    self.fetch_bg_pixels(&registers, is_window_scanline);
+                }
+
                 self.pixel_fetcher.tick(&self.vram, &registers);
 
-                if self.delay > 0 {
-                    self.delay -= 1;
-
-                    return false;
+                if self.pixel_fetcher.is_empty() {
+                    return Err(());
                 }
 
-                if self.pixel_fetcher.bg_fifo.is_empty() && matches!(self.pixel_fetcher.state, Sleep) {
-                    self.fetch_bg_pixels(&registers, is_window_scanline);
-
-                    return false;
-                }
-
-                let sprites_enable = registers.lcdc.contains(LCDControl::OBJ_ENABLE);
                 if sprites_enable {
-                    // TODO: The following is performed for each sprite on the current scanline if LCDC.1 is enabled and the X coordinate of the current scanline has a sprite on it. (?) 
-                    //  If those conditions are not met then sprite fetching is aborted.
+                    if let Some(index) = self.sprites.iter().position(|s| self.screen_x + 8 == s.x || s.x < 8) {
+                        if self.pixel_fetcher.is_empty() || !matches!(self.pixel_fetcher.state, Sleep) {
+                            return Err(());
+                        }
 
-                    // At this point the fetcher is advanced one step until it's at step 5 or until the background FIFO is not empty. (Handled inside fetch_obj_pixels).
-                    // Advancing the fetcher one step here lengthens mode 3 by 1 dot. This process may be aborted after the fetcher has advanced a step.
-                    if self.sprites.iter().any(|s| self.scanline_x + 8 >= s.x && self.scanline_x < s.x) {
-                        self.fetch_obj_pixels(&registers);
+                        let sprite = self.sprites.remove(index);
 
-                        return false;
+                        self.fetch_obj_pixels(&registers, sprite);
                     }
 
-                    // After checking for sprites at X coordinate 0 the fetcher is advanced two steps. 
-                    // The first advancement lengthens mode 3 by 1 dot and the second advancement lengthens mode 3 by 3 dots. 
-                    // After each fetcher advancement there is a chance for a sprite fetch abortion to occur.
-
-                    // The lower address for the row of pixels of the target object tile is now retrieved and lengthens mode 3 by 1 dot.
-                    // Once the address is retrieved this is the last chance for sprite fetch abortion to occur. 
-                    // Exiting object fetch lengthens mode 3 by 1 dot.
-                    // The upper address for the target object tile is now retrieved and does not shorten mode 3.
-
-                    // Before any mixing is done, if the OAM FIFO doesn't have at least 8 pixels in it then transparent pixels with the lowest priority are pushed onto the OAM FIFO.
-                    // let mut i = 0;
-                    // while self.pixel_fetcher.obj_fifo.len() < 8 {
-                    //     self.pixel_fetcher.obj_fifo.push_back(SpritePixel {
-                    //         x: self.scanline_x + i,
-                    //         color: 0,
-                    //         bg_over_obj: false,
-                    //         palette: registers.obp0,
-                    //     });
-                    // 
-                    //     i += 1;
-                    // }
+                    if matches!(self.pixel_fetcher.mode, Object {..}) && !matches!(self.pixel_fetcher.state, Sleep) {
+                        return Err(());
+                    }
                 }
 
-                let bg_pixel = self.pixel_fetcher.bg_fifo.pop_front();
+                let bg_pixel = self.pixel_fetcher.bg_fifo.pop_front().unwrap();
+                let sprite_pixel = self.pixel_fetcher.obj_fifo.pop_front();
 
                 let skip = registers.scx % 8;
-                if self.scanline_x == 0 && skip > 0 {
-                    if self.pixel_fetcher.bg_fifo.len() >= (8 - skip) as usize {
-                        return false;
-                    }
+                if self.screen_x == 0 && skip > 0 && self.pixel_fetcher.bg_fifo.len() > (16 - skip) as usize {
+                    return Err(());
                 }
-
-                // When SCX & 7 > 0 and there is a sprite at X coordinate 0 of the current scanline then mode 3 is lengthened.
-                // The amount of dots this lengthens mode 3 by is whatever the lower 3 bits of SCX are. 
-                // TODO: After this penalty is applied object fetching may be aborted.
-                // if self.scanline_x == 0 && registers.scx & 7 > 0 && self.sprites.iter().any(|s| s.x == 0) {
-                //     self.delay += (registers.scx & 7) as usize;
-                // 
-                //     return false;
-                // }
-
-                // Now it's time to render a pixel!
-                // The same process described in Sprite Fetch Abortion is performed: a pixel is rendered and the fetcher is advanced one step.
-                // This advancement lengthens mode 3 by 1 dot if the X coordinate of the current scanline is not 160.
-                // If the X coordinate is 160 the PPU stops processing sprites (because they won't be visible).
-
-                if bg_pixel.is_none() {
-                    return false;
-                }
-
-                let bg_pixel = bg_pixel.unwrap();
 
                 let mut pixel = 0;
                 let mut palette = registers.bgp;
 
                 if bg_enable {
-                    pixel = bg_pixel;
+                    pixel = bg_pixel.color;
                 }
 
-                while let Some(sprite_pixel) = self.pixel_fetcher.obj_fifo.pop_front() {
-                    if sprite_pixel.x < self.scanline_x as isize { 
-                        continue;
-                    }
-                    
+                if let Some(sprite_pixel) = sprite_pixel {
                     if !bg_enable {
                         pixel = sprite_pixel.color;
                         palette = sprite_pixel.palette;
                     } else if sprites_enable {
-                        if sprite_pixel.bg_over_obj && bg_pixel != 0 || sprite_pixel.color == 0 {
-                            pixel = bg_pixel;
+                        if sprite_pixel.bg_over_obj && bg_pixel.color != 0 || sprite_pixel.color == 0 {
+                            pixel = bg_pixel.color;
                         } else {
                             pixel = sprite_pixel.color;
                             palette = sprite_pixel.palette;
                         }
                     }
-                    
-                    break;
                 }
 
-                if self.scanline_x < 160 && registers.ly < 144 {
+                if self.screen_x < 160 && registers.ly < 144 {
                     let color = (palette >> (pixel * 2)) & 0b0000_0011;
 
-                    self.screen[registers.ly as usize * 160 + self.scanline_x as usize] = color;
+                    self.screen[registers.ly as usize * 160 + self.screen_x as usize] = color;
 
-                    self.scanline_x = (self.scanline_x + 1) % 160;
+                    self.screen_x = (self.screen_x + 1) % 160;
 
-                    if self.scanline_x == 0 {
+                    if self.screen_x == 0 {
                         mode = 0;
 
                         if lcd_enable && registers.stat & (1 << 3) != 0 {
@@ -553,24 +549,7 @@ impl Ppu {
             _ => unreachable!()
         }
 
-        if lcd_enable {
-            self.dot_counter += 1;
-        }
-
-        if self.dot_counter == 70224 {
-            self.dot_counter = 0;
-
-            result = true;
-
-            registers.ly = 0;
-            registers.window_ly = 0;
-
-            registers.interrupt_flag.remove(InterruptFlags::VBLANK | InterruptFlags::LCD_STAT);
-        }
-
-        registers.stat = (registers.stat & 0b1111_1100) | (mode & 0b0000_0011);
-
-        return result;
+        Ok(mode)
     }
 
     fn fetch_sprites(&mut self, registers: &mut IoRegisters, sprite_height: u8, line_dot: usize) {
@@ -586,70 +565,58 @@ impl Ppu {
 
         let oam_addr = 0xfe00 + (line_dot as u16 / 2) * 4;
         let sprite_y = self.vram.mem_read(oam_addr);
+        let sprite_x = self.vram.mem_read(oam_addr + 1);
 
-        if sprite_y <= ly + 16 && ly + 16 - sprite_height < sprite_y {
+        if sprite_x != 0 && ly + 16 >= sprite_y && ly + 16 < sprite_y + sprite_height {
             self.sprites.push(Oam {
                 oam_index: line_dot as u8 / 2,
                 y: sprite_y,
-                x: self.vram.mem_read(oam_addr + 1),
+                x: sprite_x,
                 tile_index: self.vram.mem_read(oam_addr + 2),
                 attributes: self.vram.mem_read(oam_addr + 3),
             });
         }
     }
     fn fetch_bg_pixels(&mut self, registers: &IoRegisters, is_window_scanline: bool) {
-        let is_window_tile = is_window_scanline && (self.scanline_x + 7) >= registers.wx && (self.scanline_x + 7) <= registers.wx.saturating_add(159);
+        let is_window_tile = is_window_scanline && (self.fetch_x + 7) >= registers.wx && (self.fetch_x + 7) <= registers.wx.saturating_add(159);
 
         let tile_map_addr = if is_window_tile {
             let bit_10: u16 = if registers.lcdc.contains(LCDControl::WINDOW_TILEMAP_AREA) { 1 } else { 0 };
             let offset_y = registers.window_ly as u16 / 8;
-            let offset_x = (self.scanline_x + 7).wrapping_sub(registers.wx) as u16 / 8;
+            let offset_x = (self.fetch_x + 7).wrapping_sub(registers.wx) as u16 / 8;
 
             0b1001_1000_0000_0000 | (bit_10 << 10) | offset_y << 5 | offset_x
         } else {
             let bit_10: u16 = if registers.lcdc.contains(LCDControl::BG_TILEMAP_AREA) { 1 } else { 0 };
             let offset_y = registers.ly.wrapping_add(registers.scy) as u16 / 8;
-            let offset_x = self.scanline_x.wrapping_add(registers.scx) as u16 / 8;
+            let offset_x = self.fetch_x.wrapping_add(registers.scx) as u16 / 8;
 
             0b1001_1000_0000_0000 | (bit_10 << 10) | offset_y << 5 | offset_x
         };
 
         if is_window_tile {
             self.pixel_fetcher.fetch_window_tile(tile_map_addr);
-
-            // When WX is 0 and the SCX & 7 > 0 mode 3 is shortened by 1 dot.
-            if registers.wx == 0 && registers.scx & 7 > 0 {
-                // self.target_mode3_count -= 1;
-            }
         } else {
-            self.pixel_fetcher.fetch_bg_tile(tile_map_addr);
+            self.pixel_fetcher.fetch_bg_tile(self.fetch_x, tile_map_addr);
         }
+
+        self.fetch_x += 8;
     }
 
-    fn fetch_obj_pixels(&mut self, registers: &IoRegisters) {
-        if self.pixel_fetcher.bg_fifo.is_empty() || !matches!(self.pixel_fetcher.state, Sleep) {
-            return;
-        }
-
+    fn fetch_obj_pixels(&mut self, registers: &IoRegisters, mut sprite: Oam) {
         let sprite_16 = registers.lcdc.contains(LCDControl::OBJ_SIZE);
 
-        if let Some(index) = self.sprites.iter().position(|s| self.scanline_x + 8 >= s.x && self.scanline_x < s.x) {
-            let mut sprite = self.sprites.remove(index);
+        let flip_sprite_v = sprite.attributes & (1 << 6) != 0;
 
-            let flip_sprite_v = sprite.attributes & (1 << 6) != 0;
+        sprite.tile_index = if sprite_16 {
+            match (flip_sprite_v, registers.ly + 16 - sprite.y < 8) {
+                (true, true) | (false, false) => sprite.tile_index | 0x01,
+                _ => sprite.tile_index & 0xfe,
+            }
+        } else {
+            sprite.tile_index
+        };
 
-            sprite.tile_index = if sprite_16 {
-                match (flip_sprite_v, registers.ly + 16 - sprite.y < 8) {
-                    (true, true) | (false, false) => sprite.tile_index | 0x01,
-                    _ => sprite.tile_index & 0xfe,
-                }
-            } else {
-                sprite.tile_index
-            };
-
-            self.pixel_fetcher.fetch_obj_tile(&sprite);
-
-            self.delay += 7;
-        }
+        self.pixel_fetcher.fetch_obj_tile(&sprite);
     }
 }
