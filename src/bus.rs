@@ -89,7 +89,9 @@ impl Bus {
         let cartridge_ram_bytes_total = cartridge_ram_size_kib(self.cartridge_ram_size_type) * 1024;
         
         self.ram_banks = Vec::with_capacity(cartridge_ram_bytes_total / 0x2000);
-        self.ram_banks.fill([0; 0x2000]);
+        while self.ram_banks.len() < self.ram_banks.capacity() {
+            self.ram_banks.push([0; 0x2000]);
+        }
 
         self.program = program;
     }
