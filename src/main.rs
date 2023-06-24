@@ -9,20 +9,37 @@ extern crate sdl2;
 
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
-use sdl2::pixels::{Color};
+use sdl2::pixels::{Color, PixelFormatEnum};
 use std::time::{Duration, Instant};
 
 #[macro_use]
 extern crate bitflags;
 
 use std::fs;
-use sdl2::rect::{Point};
+use sdl2::audio::AudioSpecDesired;
+use sdl2::rect::{Point, Rect};
+use sdl2::render::{Canvas, TextureCreator, TextureQuery, WindowCanvas};
+use sdl2::ttf::Font;
+use sdl2::video::WindowContext;
 
 
 pub(crate) trait Mem {
     fn mem_read(&self, addr: u16) -> u8;
     fn mem_write(&mut self, addr: u16, value: u8);
 }
+
+// const COLORS: [Color; 4] = [
+//     Color::RGB(255, 255, 255),
+//     Color::RGB(192, 192, 192),
+//     Color::RGB(128, 128, 128),
+//     Color::RGB(0, 0, 0),
+// ];
+const COLORS: [Color; 4] = [
+    Color::RGB(0xe2, 0xf3, 0xe4),
+    Color::RGB(0x94, 0xe3, 0x44),
+    Color::RGB(0x46, 0x87, 0x8f),
+    Color::RGB(0x33, 0x2c, 0x50),
+];
 
 fn main() -> Result<(), String> {
     // let rom = fs::read("test\\cpu_instrs\\cpu_instrs.gb").unwrap();                          // Pass
@@ -40,6 +57,9 @@ fn main() -> Result<(), String> {
     let rom = fs::read("test\\mario.gb").unwrap();
     // let rom = fs::read("test\\mario2.gb").unwrap();
     // let rom = fs::read("test\\tetris.gb").unwrap();
+    // let rom = fs::read("test\\mooneye-test-suite-wilbertpol\\acceptance\\gpu\\intr_2_mode3_timing.gb").unwrap();
+    // let rom = fs::read("test\\mooneye-test-suite-wilbertpol\\acceptance\\gpu\\intr_2_oam_ok_timing.gb").unwrap();
+    // let rom = fs::read("test\\mooneye-test-suite-wilbertpol\\acceptance\\gpu\\intr_2_0_timing.gb").unwrap();
 
     let file = fs::File::create("log.txt").unwrap();
     let writer = std::io::LineWriter::with_capacity(512 * 1024 * 1024, file);
@@ -50,6 +70,21 @@ fn main() -> Result<(), String> {
 
     let sdl_context = sdl2::init()?;
     let video_subsystem = sdl_context.video()?;
+    let audio_subsystem = sdl_context.audio()?;
+    let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string())?;
+
+    // Load a font
+    let font = ttf_context.load_font("JetBrainsMono-Regular.ttf", 9)?;
+
+    let desired_spec = AudioSpecDesired {
+        freq: Some(48_000),
+        channels: Some(2),
+        // mono  -
+        samples: None, // default sample size
+    };
+
+    let device = audio_subsystem.open_queue::<f32, _>(None, &desired_spec)?;
+    device.resume();
 
     let window = video_subsystem
         .window("Yet Another GameBoy Emulator", 320, 288)
@@ -58,23 +93,24 @@ fn main() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let mut canvas = window.into_canvas().build().map_err(|e| e.to_string())?;
-
-    canvas.set_scale(2.0, 2.0).unwrap();
+    let texture_creator = canvas.texture_creator();
 
     let mut event_pump = sdl_context.event_pump()?;
-    
-    let colors = [
-        Color::RGB(255, 255, 255),
-        Color::RGB(192, 192, 192),
-        Color::RGB(128, 128, 128),
-        Color::RGB(0, 0, 0),
-    ];
-    
+
     let mut now = Instant::now();
+    let mut sleep_overhead = Duration::ZERO;
+
+    let mut screen = texture_creator
+        .create_texture_streaming(PixelFormatEnum::RGB24, 160, 144)
+        .map_err(|e| e.to_string())?;
+
+    let mut frame_delta = Duration::from_millis(16);
 
     'running: loop {
-        let mut time_budget = Duration::from_micros(16742);
-        
+        let mut time_budget = Duration::from_secs_f32(1.0 / 59.73);
+
+        let previous_now = now;
+
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -117,32 +153,73 @@ fn main() -> Result<(), String> {
                 _ => {}
             }
         }
-        
-        let previous_now = now;
 
         if cpu.run_to_frame(time_budget) {
-            for (index, &color) in cpu.bus.ppu.screen.iter().enumerate() {
-                canvas.set_draw_color(colors[color as usize]);
-                canvas.draw_point(Point::new((index % 160) as i32, (index / 160) as i32)).unwrap();
-            }
+            screen.with_lock(None, |buffer: &mut [u8], pitch: usize| {
+                for (index, &color) in cpu.bus.ppu.screen.iter().enumerate() {
+                    let x = (index % 160);
+                    let y = (index / 160);
 
-            canvas.present();
+                    let color = COLORS[color as usize];
+
+                    let offset = y * pitch + x * 3;
+                    buffer[offset] = color.r;
+                    buffer[offset + 1] = color.g;
+                    buffer[offset + 2] = color.b;
+                }
+            })?;
+        }
+        
+        // Draw screen
+        canvas.copy(&screen, None, Some(Rect::new(0, 0, 160 * 2, 144 * 2)))?;
+
+        render_text(&font, &mut canvas, &texture_creator, format!("{:.2}", 1.0 / frame_delta.as_secs_f32()).as_str(), Point::new(4, 4))?;
+
+        canvas.present();
+
+        let sample_count_src = cpu.bus.apu.buffer.len();
+        if sample_count_src > 0 {
+            device.queue_audio(cpu.bus.apu.buffer.as_slice()).unwrap();
+
+            cpu.bus.apu.buffer.clear();
         }
 
-        now = Instant::now();
+        time_budget = time_budget.saturating_sub(previous_now.elapsed());
 
-        let measurement = now - previous_now;
-        if time_budget > measurement {
-            // Take off the delta to compensate for a previous long frame.
-            time_budget -= measurement;
-            
+        // Take off the delta to compensate for a previous long frame.
+        time_budget = time_budget.saturating_sub(sleep_overhead);
+
+        if !time_budget.is_zero() {
+            let before_sleep = Instant::now();
+
             std::thread::sleep(time_budget);
+
+            sleep_overhead = before_sleep.elapsed() - time_budget;
         } else {
             // Slower than real time. Skip frames?
         }
 
         now = Instant::now();
+        
+        frame_delta = now - previous_now;
     }
 
+    Ok(())
+}
+
+fn render_text(font: &Font, canvas: &mut WindowCanvas, texture_creator: &TextureCreator<WindowContext>, text: &str, pos: Point) -> Result<(), String> {
+// render a surface, and convert it to a texture bound to the canvas
+    let surface = font
+        .render(text)
+        .shaded(Color::RGBA(255, 255, 0, 255), Color::RGBA(0, 0, 0, 192))
+        .map_err(|e| e.to_string())?;
+    let texture = texture_creator
+        .create_texture_from_surface(&surface)
+        .map_err(|e| e.to_string())?;
+
+    let TextureQuery { width, height, .. } = texture.query();
+
+    // Draw FPS
+    canvas.copy(&texture, None, Some(Rect::new(pos.x, pos.y, width, height)))?;
     Ok(())
 }

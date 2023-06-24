@@ -2,10 +2,10 @@
 use crate::Mem;
 
 pub struct Apu {
+    accumulator: f32,
+    pub buffer: Vec<f32>,
     div_prev: u8,
     pub div_apu: u8,
-    freq_sweep_pace: u8,
-    freq_sweep_counter: u8,
     /// Channel 1 sweep
     /// Bit 6-4 - Sweep pace
     /// Bit 3   - Sweep increase/decrease
@@ -17,8 +17,6 @@ pub struct Apu {
     /// Bit 7-6 - Wave duty            (Read/Write)
     /// Bit 5-0 - Initial length timer (Write Only)
     pub nr11: u8,
-    ch1_envelope_sweep_pace: u8,
-    ch1_envelope_sweep_counter: u8,
     /// Channel 1 volume & envelope
     /// Bit 7-4 - Initial volume of envelope (0-F) (0=No Sound)
     /// Bit 3   - Envelope direction (0=Decrease, 1=Increase)
@@ -32,10 +30,26 @@ pub struct Apu {
     ///           (1=Stop output when length in NR11 expires)
     /// Bit 2-0 - "Wavelength"'s higher 3 bits (Write Only)
     pub nr14: u8,
+    ch1_freq_sweep_addition: bool,
+    ch1_freq_sweep_slope: u8,
+    ch1_freq_sweep_pace: u8,
+    ch1_freq_sweep_counter: u8,
+    ch1_length_timer: u8,
+    ch1_envelope_sweep_pace: u8,
+    ch1_envelope_sweep_counter: u8,
+    ch1_envelope_sweep_direction_increase: i8,
+    ch1_period_counter: u16,
+    ch1_duty_counter: u8,
+    ch1_volume: u8,
     /// Channel 2 sweep
     pub nr21: u8,
+    ch2_length_timer: u8,
     ch2_envelope_sweep_pace: u8,
     ch2_envelope_sweep_counter: u8,
+    ch2_envelope_sweep_direction_increase: i8,
+    ch2_period_counter: u16,
+    ch2_duty_counter: u8,
+    ch2_volume: u8,
     /// Channel 2 length timer & duty cycle
     pub nr22: u8,
     /// Channel 2 volume & envelope
@@ -93,25 +107,39 @@ pub struct Apu {
 }
 
 impl Apu {
-    pub  fn new() -> Self {
+    pub fn new() -> Self {
         Self {
+            accumulator: 0f32,
+            buffer: Vec::<f32>::with_capacity(32_000),
             div_prev: 0,
             div_apu: 0,
-            freq_sweep_pace: 0,
-            freq_sweep_counter: 0,
             nr10: 0x80,
             nr11: 0xbf,
-            ch1_envelope_sweep_pace: 3, // bit 0-2 of nr12
-            ch1_envelope_sweep_counter: 0,
             nr12: 0xf3,
             nr13: 0xff,
             nr14: 0xbf,
+            ch1_freq_sweep_addition: false, // bit 3 of nr10
+            ch1_freq_sweep_slope: 0, // bit 0-2 of nr10
+            ch1_freq_sweep_pace: 0, // bits 4-6 of nr10
+            ch1_freq_sweep_counter: 0,
+            ch1_length_timer: 0x1f,
+            ch1_envelope_sweep_pace: 3, // bit 0-2 of nr12
+            ch1_envelope_sweep_counter: 0,
+            ch1_envelope_sweep_direction_increase: -1, // 1 if bit 3 of nr12 is 1, otherwise -1
+            ch1_period_counter: 0x7ff, // (nr14 & 3) << 8 | nr13
+            ch1_duty_counter: 0, // When first starting up a pulse channel, it will always output a (digital) zero.
+            ch1_volume: 0xf, // bit 4-7 of nr12
             nr21: 0xbf,
-            ch2_envelope_sweep_pace: 0,
-            ch2_envelope_sweep_counter: 0,
             nr22: 0x00,
             nr23: 0xff,
             nr24: 0xbf,
+            ch2_length_timer: 0x1f,
+            ch2_envelope_sweep_pace: 3,
+            ch2_envelope_sweep_counter: 0,
+            ch2_envelope_sweep_direction_increase: -1,
+            ch2_period_counter: 0x7ff,
+            ch2_duty_counter: 0, // When first starting up a pulse channel, it will always output a (digital) zero.
+            ch2_volume: 0xf,
             nr30: 0x7f,
             nr31: 0xff,
             nr32: 0x9f,
@@ -129,49 +157,139 @@ impl Apu {
             wave_ram: [0; 0x10],
         }
     }
-    
+
     pub fn tick(&mut self, registers: &IoRegisters) {
         // TODO: if NR52.7 is off, all registers except NR52 and NRx1 are read-only. There is a different case for GBC.
-        
-        if self.div_prev & (1<<4) != 0 && registers.div & (1<<4) == 0 {
-            self.div_apu = self.div_prev.wrapping_add(1);
+
+        // TODO: Could this miss iterations of `registers.div`? Can DIV increment more than 32? 
+        if self.div_prev & (1 << 4) != 0 && registers.div & (1 << 4) == 0 {
+            self.div_apu = self.div_apu.wrapping_add(1);
+
+            self.process();
         }
 
+        // Pulse modulation
+        {
+            self.ch1_period_counter = (self.ch1_period_counter + 1) & 0x7ff;
+            if self.ch1_period_counter == 0 {
+                let period: u16 = (self.nr14 as u16 & 0b0000_0111) << 8 | self.nr13 as u16;
+
+                self.ch1_period_counter = period;
+
+                self.ch1_duty_counter = (self.ch1_duty_counter + 1) % 8;
+            }
+
+            self.ch2_period_counter = (self.ch2_period_counter + 1) & 0x7ff;
+            if self.ch2_period_counter == 0 {
+                let period: u16 = (self.nr24 as u16 & 0b0000_0111) << 8 | self.nr23 as u16;
+
+                self.ch2_period_counter = period;
+
+                self.ch2_duty_counter = (self.ch2_duty_counter + 1) % 8;
+            }
+        }
+
+        fn sample_to_volume(sample: u8) -> f32 {
+            ((0xf - sample) as f32 / 0xf as f32) * 2.0 - 1.0
+        }
+        
+        // Mixing
+        let step = (1024 * 1024) as f32 / 48_000f32;
+        while self.accumulator > step {
+            // Channel 1
+            let ch1_dac_enabled = self.nr12 & 0xf8 != 0;
+            let ch1_sample = if ch1_dac_enabled && self.nr52 & (1 << 0) != 0 {
+                let wave_duty = match self.nr11 >> 6 {
+                    0 => 1, // 12.5% of 8 samples
+                    1 => 2, // 25% of 8 samples
+                    2 => 4, // 50% of 8 samples
+                    3 => 6, // 75% of 8 samples
+                    _ => unreachable!()
+                };
+
+                let sample = if self.ch1_duty_counter < wave_duty {
+                    self.ch1_volume
+                } else {
+                    0
+                };
+                
+                sample_to_volume(sample)
+            } else { 
+                0.0
+            };
+
+            // Channel 2
+            let ch2_dac_enabled = self.nr22 & 0xf8 != 0;
+            let ch2_sample = if ch2_dac_enabled && self.nr52 & (1 << 1) != 0 {
+                // Push one sample
+                let wave_duty = match self.nr21 >> 6 {
+                    0 => 1, // 12.5% of 8 samples
+                    1 => 2, // 25% of 8 samples
+                    2 => 4, // 50% of 8 samples
+                    3 => 6, // 75% of 8 samples
+                    _ => unreachable!()
+                };
+
+                let sample = if self.ch2_duty_counter < wave_duty {
+                    self.ch2_volume
+                } else {
+                    0
+                };
+
+                sample_to_volume(sample)
+            } else {
+                0.0
+            };
+
+            // let mixed_sample = ch1_sample + ch2_sample + 0f32 + 0f32;
+            let sample_left =
+                ch1_sample * ((self.nr51 >> 4) & 1) as f32 +
+                    ch2_sample * ((self.nr51 >> 5) & 1) as f32 +
+                    0.0 +
+                    0.0;
+            let sample_right =
+                ch1_sample * ((self.nr51 >> 0) & 1) as f32 +
+                    ch2_sample * ((self.nr51 >> 1) & 1) as f32 +
+                    0.0 +
+                    0.0;
+
+            let volume_left = (1 + ((self.nr50 >> 4) & 7)) as f32 * 0.125;
+            let volume_right = (1 + ((self.nr50 >> 0) & 7)) as f32 * 0.125;
+
+            self.buffer.push(sample_left * volume_left * 0.25);
+            self.buffer.push(sample_right * volume_right * 0.25);
+            
+            self.accumulator -= step;
+        }
+        
+        self.accumulator += 1.0;
+
+        self.div_prev = registers.div;
+    }
+
+    fn process(&mut self) {
         // Envelope sweep
         // 64Hz
         if self.div_apu % 8 == 0 {
             // Channel 1
             {
-                if self.nr12 & 0b1111_1000 == 0 {
-                    self.nr52 &= !(1 << 0);
-                } else {
-                    let ch1_initial_volume = self.nr12 >> 4;
-                    let ch1_envelope_direction_increase = self.nr12 & 0b0000_1000 == 0;
-                    let ch1_sweep_pace = self.nr12 & 0b0000_0111;
-
+                if self.nr52 & (1 << 0) != 0 && self.ch1_envelope_sweep_pace > 0 {
                     self.ch1_envelope_sweep_counter = (self.ch1_envelope_sweep_counter + 1) % self.ch1_envelope_sweep_pace;
-                    if self.ch1_envelope_sweep_counter == 0 {
-                        // TODO: Apply envelope.
+                    if self.ch1_envelope_sweep_pace > 0 && self.ch1_envelope_sweep_counter == 0 {
+                        self.ch1_volume = self.ch1_volume.saturating_add_signed(self.ch1_envelope_sweep_direction_increase).min(0xf);
                     }
-
-                    self.ch1_envelope_sweep_pace = ch1_sweep_pace;
                 }
             }
 
             // Channel 2
             {
-                if self.nr22 & 0b1111_1000 == 0 {
-                    self.nr52 &= !(1<<1);
-                } else {
-                    let ch2_initial_volume = self.nr22 >> 4;
-                    let ch2_envelope_direction_increase = self.nr22 & 0b0000_1000 == 0;
-                    let ch2_sweep_pace = self.nr22 & 0b0000_0111;
-
+                if self.nr52 & (1 << 1) != 0 && self.ch2_envelope_sweep_pace > 0 {
                     self.ch2_envelope_sweep_counter = (self.ch2_envelope_sweep_counter + 1) % self.ch2_envelope_sweep_pace;
                     if self.ch2_envelope_sweep_counter == 0 {
-                        // TODO: Apply envelope.
+                        self.ch2_volume = self.ch2_volume.saturating_add_signed(self.ch2_envelope_sweep_direction_increase).min(0xf);
                     }
 
+                    let ch2_sweep_pace = self.nr22 & 0b0000_0111;
                     self.ch2_envelope_sweep_pace = ch2_sweep_pace;
                 }
             }
@@ -179,8 +297,8 @@ impl Apu {
             // Channel 4
             {
                 if self.nr42 & 0b1111_1000 == 0 {
-                    self.nr52 &= !(1<<3);
-                } else {
+                    self.nr52 &= !(1 << 3);
+                } else if self.ch4_envelope_sweep_pace > 0 {
                     let ch4_initial_volume = self.nr42 >> 4;
                     let ch4_envelope_direction_increase = self.nr42 & 0b0000_1000 == 0;
                     let ch4_sweep_pace = self.nr42 & 0b0000_0111;
@@ -198,26 +316,27 @@ impl Apu {
         // Sound length
         // 256Hz
         if self.div_apu % 2 == 0 {
-            let ch1_length_timer_enable = self.nr14 & (1<<6) != 0;
+            let ch1_length_timer_enable = self.nr14 & (1 << 6) != 0;
             if ch1_length_timer_enable {
-                self.nr11 = (self.nr11 & 0b0011_1111).wrapping_sub(1) % 64;
-                
-                if self.nr11 == 0 {
+                self.ch1_length_timer = self.ch1_length_timer.wrapping_sub(1);
+
+                if self.ch1_length_timer == 0 {
                     // Turn off channel 1
                     self.nr52 &= !(1 << 0);
                 }
             }
 
-            let ch2_length_timer_enable = self.nr24 & (1<<6) != 0;
+            let ch2_length_timer_enable = self.nr24 & (1 << 6) != 0;
             if ch2_length_timer_enable {
-                self.nr21 = (self.nr21 & 0b0011_1111).wrapping_sub(1) % 64;
+                self.ch2_length_timer = self.ch2_length_timer.wrapping_sub(1);
 
-                if self.nr21 == 0 {
-                    self.nr52 &= !(1 << 1); 
+                if self.ch2_length_timer == 0 {
+                    // Turn off channel 1
+                    self.nr52 &= !(1 << 1);
                 }
             }
 
-            let ch3_length_timer_enable = self.nr34 & (1<<6) != 0;
+            let ch3_length_timer_enable = self.nr34 & (1 << 6) != 0;
             if ch3_length_timer_enable {
                 self.nr31 = self.nr31.wrapping_sub(1);
 
@@ -226,48 +345,42 @@ impl Apu {
                 }
             }
 
-            let ch4_length_timer_enable = self.nr41 & (1<<6) != 0;
+            let ch4_length_timer_enable = self.nr41 & (1 << 6) != 0;
             if ch4_length_timer_enable {
                 self.nr41 = self.nr41.wrapping_sub(1);
 
                 if self.nr41 == 0 {
-                    self.nr52 &= !(1 << 4); 
+                    self.nr52 &= !(1 << 4);
                 }
             }
         }
-        
+
         // Channel 1 frequency sweep
         // 128Hz
-        let sweep_pace = (self.nr10 & 0b0111_0000) >> 4;
-        if self.div_apu % 4 == 0 && sweep_pace != 0 {
-            let sweep_addition = self.nr10 & 0b0000_1000 == 0;
-            let sweep_slope = self.nr10 & 0b0000_0111;
-            
-            self.freq_sweep_counter = (self.freq_sweep_counter + 1) % self.freq_sweep_pace;
-            
-            if self.freq_sweep_counter == 0 {
-                let wavelength: u16 = (self.nr14 as u16 & 0b0000_0111) << 8 | self.nr13 as u16;
+        if self.div_apu % 4 == 0 && self.ch1_freq_sweep_pace != 0 {
+            self.ch1_freq_sweep_counter = (self.ch1_freq_sweep_counter + 1) % self.ch1_freq_sweep_pace;
 
-                let mut next_wavelength = if sweep_addition {
-                    wavelength + (wavelength >> sweep_slope)
+            if self.ch1_freq_sweep_counter == 0 {
+                let period: u16 = (self.nr14 as u16 & 0b0000_0111) << 8 | self.nr13 as u16;
+
+                let next_period = if self.ch1_freq_sweep_addition {
+                    period + (period >> self.ch1_freq_sweep_slope)
                 } else {
-                    wavelength - (wavelength >> sweep_slope)
+                    period - (period >> self.ch1_freq_sweep_slope)
                 };
 
-                if next_wavelength > 0x7ff {
+                self.nr13 = next_period as u8;
+                self.nr14 = self.nr14 & 0b0000_0111 | (next_period >> 8) as u8;
+
+                if next_period > 0x7ff {
                     self.nr52 &= !(1 << 0);
                 }
 
-                next_wavelength &= 0x7ff;
-
-                self.nr13 = next_wavelength as u8;
-                self.nr14 = self.nr14 & 0b0000_0111 | (next_wavelength >> 8) as u8;
+                self.ch1_freq_sweep_pace = (self.nr10 & 0b0111_0000) >> 4;
+                self.ch1_freq_sweep_addition = self.nr10 & 0b0000_1000 == 0;
+                self.ch1_freq_sweep_slope = self.nr10 & 0b0000_0111;
             }
-
-            self.freq_sweep_pace = sweep_pace;
         }
-        
-        self.div_prev = registers.div;
     }
 }
 
@@ -278,20 +391,20 @@ impl Mem for Apu {
             0xff11 => self.nr11 & 0b1100_0000,
             0xff12 => self.nr12,
             0xff13 => panic!("cannot read nr13 register"),
-            0xff14 => self.nr14 & (1<<6),
+            0xff14 => self.nr14 & (1 << 6),
             0xff16 => self.nr21 & 0b1100_0000,
             0xff17 => self.nr22,
             0xff18 => panic!("cannot read nr23 register"),
-            0xff19 => self.nr24 & (1<<6),
+            0xff19 => self.nr24 & (1 << 6),
             0xff1a => self.nr30,
             0xff1b => panic!("cannot read nr31 register"),
             0xff1c => self.nr32,
             0xff1d => panic!("cannot read nr33 register"),
-            0xff1e => self.nr34 & (1<<6),
+            0xff1e => self.nr34 & (1 << 6),
             0xff20 => panic!("cannot read nr41 register"),
             0xff21 => self.nr42,
             0xff22 => self.nr43,
-            0xff23 => self.nr44 & (1<<6),
+            0xff23 => self.nr44 & (1 << 6),
             0xff24 => self.nr50,
             0xff25 => self.nr51,
             0xff26 => self.nr52,
@@ -303,15 +416,46 @@ impl Mem for Apu {
     fn mem_write(&mut self, addr: u16, value: u8) {
         match addr {
             0xff10 => self.nr10 = value,
-            0xff11 => self.nr11 = (value & 0b1100_0000) & (63 - value & 0b0011_1111), // Length timer is inverted when written and counts down.
+            0xff11 => {
+                self.nr11 = (value & 0b1100_0000) & (63 - (value & 0b0011_1111)); // Length timer is inverted when written and counts down.
+                self.ch1_length_timer = self.nr11 & 0b0011_1111;
+            }
             0xff12 => self.nr12 = value,
             0xff13 => self.nr13 = value,
-            0xff14 => self.nr14 = value,
-            0xff16 => self.nr21 =  (value & 0b1100_0000) & (63 - value & 0b0011_1111), // Length timer is inverted when written and counts down.
+            0xff14 => {
+                self.nr14 = value;
+
+                if value & (1 << 7) != 0 {
+                    self.ch1_freq_sweep_pace = (self.nr10 & 0b0111_0000) >> 4;
+                    self.ch1_freq_sweep_addition = self.nr10 & 0b0000_1000 == 0;
+                    self.ch1_freq_sweep_slope = self.nr10 & 0b0000_0111;
+                    self.ch1_freq_sweep_counter = 0;
+                    self.ch1_envelope_sweep_direction_increase = if self.nr12 & 0b0000_1000 == 0 { -1 } else { 1 };
+                    self.ch1_envelope_sweep_pace = self.nr12 & 0b0000_0011;
+                    self.ch1_envelope_sweep_counter = 0;
+                    self.ch1_duty_counter = 0;
+                    self.ch1_volume = self.nr12 >> 4;
+
+                    self.nr52 |= 1 << 0;
+                }
+            }
+            0xff16 => self.nr21 = (value & 0b1100_0000) & (63 - (value & 0b0011_1111)), // Length timer is inverted when written and counts down.
             0xff17 => self.nr22 = value,
             0xff18 => self.nr23 = value,
-            0xff19 => self.nr24 = value,
-            0xff1a => self.nr30 = value & (1<<7),
+            0xff19 => {
+                self.nr24 = value;
+
+                if value & (1 << 7) != 0 {
+                    self.ch2_envelope_sweep_direction_increase = if self.nr22 & 0b0000_1000 == 0 { -1 } else { 1 };
+                    self.ch2_envelope_sweep_pace = self.nr22 & 0b0000_0011;
+                    self.ch2_envelope_sweep_counter = 0;
+                    self.ch2_duty_counter = 0;
+                    self.ch2_volume = self.nr22 >> 4;
+
+                    self.nr52 |= 1 << 1;
+                }
+            }
+            0xff1a => self.nr30 = value & (1 << 7),
             0xff1b => self.nr31 = 255 - value,
             0xff1c => self.nr32 = value,
             0xff1d => self.nr33 = value,
@@ -322,7 +466,7 @@ impl Mem for Apu {
             0xff23 => self.nr44 = value,
             0xff24 => self.nr50 = value,
             0xff25 => self.nr51 = value,
-            0xff26 => self.nr52 = value & (1<<7),
+            0xff26 => self.nr52 = value & (1 << 7),
             0xff30..=0xff3f => self.wave_ram[(addr - 0xff30) as usize] = value,
             _ => unreachable!()
         }

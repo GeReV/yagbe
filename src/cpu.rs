@@ -78,7 +78,9 @@ impl Cpu {
                 }
             }
             
-            self.bus.apu.tick(&self.bus.io_registers);
+            for _ in 0..m_cycles.0 {
+                self.bus.apu.tick(&self.bus.io_registers);
+            }
             
             if self.accumulator.is_zero() {
                 return false;
