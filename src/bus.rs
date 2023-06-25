@@ -130,8 +130,8 @@ impl Mem for Bus {
                 // TODO: OAM corruption, return 0?
                 return 0xff;
             }
-            0xff10..=0xff26 => self.apu.mem_read(addr),
-            0xff00..=0xff0f | 0xff27..=0xff7f => self.io_registers.mem_read(addr),
+            0xff10..=0xff3f => self.apu.mem_read(addr),
+            0xff00..=0xff0f | 0xff40..=0xff7f => self.io_registers.mem_read(addr),
             0xff80..=0xfffe => self.hram[(addr - 0xff80) as usize],
             0xffff => self.io_registers.mem_read(addr),
             _ => unreachable!()
@@ -209,8 +209,8 @@ impl Mem for Bus {
             0xe000..=0xfdff => self.wram[(addr - 0xe000) as usize] = value,
             0xfe00..=0xfe9f => self.ppu.vram.mem_write(addr, value),
             0xfea0..=0xfeff => {}, // panic!("not usable"),
-            0xff10..=0xff26 => self.apu.mem_write(addr, value),
-            0xff00..=0xff0f | 0xff27..=0xff7f => self.io_registers.mem_write(addr, value),
+            0xff10..=0xff3f => self.apu.mem_write(addr, value),
+            0xff00..=0xff0f | 0xff40..=0xff7f => self.io_registers.mem_write(addr, value),
             0xff80..=0xfffe => self.hram[(addr - 0xff80) as usize] = value,
             0xffff => self.io_registers.mem_write(addr, value),
             _ => unreachable!()

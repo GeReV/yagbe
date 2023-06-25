@@ -28,18 +28,18 @@ pub(crate) trait Mem {
     fn mem_write(&mut self, addr: u16, value: u8);
 }
 
-// const COLORS: [Color; 4] = [
-//     Color::RGB(255, 255, 255),
-//     Color::RGB(192, 192, 192),
-//     Color::RGB(128, 128, 128),
-//     Color::RGB(0, 0, 0),
-// ];
 const COLORS: [Color; 4] = [
-    Color::RGB(0xe2, 0xf3, 0xe4),
-    Color::RGB(0x94, 0xe3, 0x44),
-    Color::RGB(0x46, 0x87, 0x8f),
-    Color::RGB(0x33, 0x2c, 0x50),
+    Color::RGB(0xff, 0xff, 0xff),
+    Color::RGB(0xc0, 0xc0, 0xc0),
+    Color::RGB(0x40, 0x40, 0x40),
+    Color::RGB(0, 0, 0),
 ];
+// const COLORS: [Color; 4] = [
+//     Color::RGB(0xe2, 0xf3, 0xe4),
+//     Color::RGB(0x94, 0xe3, 0x44),
+//     Color::RGB(0x46, 0x87, 0x8f),
+//     Color::RGB(0x33, 0x2c, 0x50),
+// ];
 
 fn main() -> Result<(), String> {
     // let rom = fs::read("test\\cpu_instrs\\cpu_instrs.gb").unwrap();                          // Pass
@@ -105,6 +105,8 @@ fn main() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let mut frame_delta = Duration::from_millis(16);
+    
+    let mut show_fps = false;
 
     'running: loop {
         let mut time_budget = Duration::from_secs_f32(1.0 / 59.73);
@@ -123,6 +125,7 @@ fn main() -> Result<(), String> {
                     ..
                 } => {
                     match keycode {
+                        Keycode::F2 => show_fps = !show_fps,
                         Keycode::Down => cpu.bus.io_registers.joyp_directions &= !(1 << 3),
                         Keycode::Up => cpu.bus.io_registers.joyp_directions &= !(1 << 2),
                         Keycode::Left => cpu.bus.io_registers.joyp_directions &= !(1 << 1),
@@ -173,7 +176,9 @@ fn main() -> Result<(), String> {
         // Draw screen
         canvas.copy(&screen, None, Some(Rect::new(0, 0, 160 * 2, 144 * 2)))?;
 
-        render_text(&font, &mut canvas, &texture_creator, format!("{:.2}", 1.0 / frame_delta.as_secs_f32()).as_str(), Point::new(4, 4))?;
+        if show_fps {
+            render_text(&font, &mut canvas, &texture_creator, format!("{:.2}", 1.0 / frame_delta.as_secs_f32()).as_str(), Point::new(4, 4))?;
+        }
 
         canvas.present();
 

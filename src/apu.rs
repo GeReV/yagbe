@@ -1,9 +1,13 @@
 ﻿use crate::io_registers::IoRegisters;
 use crate::Mem;
 
+const APU_FREQUENCY: usize = 1024 * 1024; // Hz 
+
 pub struct Apu {
     accumulator: f32,
     pub buffer: Vec<f32>,
+    pub master_volume: f32,
+    pub sample_rate: usize,
     div_prev: u8,
     pub div_apu: u8,
     /// Channel 1 sweep
@@ -43,6 +47,12 @@ pub struct Apu {
     ch1_volume: u8,
     /// Channel 2 sweep
     pub nr21: u8,
+    /// Channel 2 length timer & duty cycle
+    pub nr22: u8,
+    /// Channel 2 volume & envelope
+    pub nr23: u8,
+    /// Channel 2 wavelength high & control
+    pub nr24: u8,
     ch2_length_timer: u8,
     ch2_envelope_sweep_pace: u8,
     ch2_envelope_sweep_counter: u8,
@@ -50,12 +60,6 @@ pub struct Apu {
     ch2_period_counter: u16,
     ch2_duty_counter: u8,
     ch2_volume: u8,
-    /// Channel 2 length timer & duty cycle
-    pub nr22: u8,
-    /// Channel 2 volume & envelope
-    pub nr23: u8,
-    /// Channel 2 wavelength high & control
-    pub nr24: u8,
     /// Channel 3 DAC enable
     /// Bit 7 - Sound Channel 3 DAC  (0=Off, 1=On)
     pub nr30: u8,
@@ -69,16 +73,24 @@ pub struct Apu {
     pub nr33: u8,
     /// Channel 3 wavelength high & control
     pub nr34: u8,
+    ch3_length_timer: u8,
+    ch3_period_counter: u16,
+    ch3_sample_counter: u8,
     /// Channel 4 sweep
     pub nr41: u8,
-    ch4_envelope_sweep_pace: u8,
-    ch4_envelope_sweep_counter: u8,
     /// Channel 4 length timer & duty cycle
     pub nr42: u8,
     /// Channel 4 volume & envelope
     pub nr43: u8,
     /// Channel 4 wavelength high & control
     pub nr44: u8,
+    ch4_length_timer: u8,
+    ch4_envelope_sweep_pace: u8,
+    ch4_envelope_sweep_counter: u8,
+    ch4_envelope_sweep_direction_increase: i8,
+    ch4_tick_counter: usize,
+    ch4_lsfr: u16,
+    ch4_volume: u8,
     /// Master volume & VIN panning
     /// Bit 7   - Mix VIN into left output  (1=Enable)
     /// Bit 6-4 - Left output volume        (0-7)
@@ -111,6 +123,8 @@ impl Apu {
         Self {
             accumulator: 0f32,
             buffer: Vec::<f32>::with_capacity(32_000),
+            master_volume: 0.25,
+            sample_rate: 48_000,
             div_prev: 0,
             div_apu: 0,
             nr10: 0x80,
@@ -122,7 +136,7 @@ impl Apu {
             ch1_freq_sweep_slope: 0, // bit 0-2 of nr10
             ch1_freq_sweep_pace: 0, // bits 4-6 of nr10
             ch1_freq_sweep_counter: 0,
-            ch1_length_timer: 0x1f,
+            ch1_length_timer: 0x1f, // bits 0-5 of nr11
             ch1_envelope_sweep_pace: 3, // bit 0-2 of nr12
             ch1_envelope_sweep_counter: 0,
             ch1_envelope_sweep_direction_increase: -1, // 1 if bit 3 of nr12 is 1, otherwise -1
@@ -145,12 +159,20 @@ impl Apu {
             nr32: 0x9f,
             nr33: 0xff,
             nr34: 0xbf,
+            ch3_length_timer: 0xff,
+            ch3_period_counter: 0x7ff,
+            ch3_sample_counter: 0,
             nr41: 0xff,
-            ch4_envelope_sweep_pace: 0,
-            ch4_envelope_sweep_counter: 0,
             nr42: 0x00,
             nr43: 0x00,
             nr44: 0xbf,
+            ch4_length_timer: 0x1f,
+            ch4_envelope_sweep_pace: 0,
+            ch4_envelope_sweep_counter: 0,
+            ch4_envelope_sweep_direction_increase: -1,
+            ch4_tick_counter: 0,
+            ch4_lsfr: 0,
+            ch4_volume: 0,
             nr50: 0x77,
             nr51: 0xf3,
             nr52: 0xf1,
@@ -189,12 +211,61 @@ impl Apu {
             }
         }
 
+        // Wave output
+        {
+            // Clocked at 2x APU_FREQUENCY
+            for _ in 0..2 {
+                self.ch3_period_counter = (self.ch3_period_counter + 1) & 0x7ff;
+                if self.ch3_period_counter == 0 {
+                    let period: u16 = (self.nr34 as u16 & 0b0000_0111) << 8 | self.nr33 as u16;
+
+                    self.ch3_period_counter = period;
+
+                    self.ch3_sample_counter = (self.ch3_sample_counter + 1) % 32;
+                }
+            }
+        }
+
+        // Noise
+        {
+            let clock_shift = self.nr43 >> 4;
+            let lsfr_short_mode = self.nr43 & (1 << 3) == 1;
+            let clock_divider = self.nr43 & 0b0000_0111;
+
+            let tick_frequency_denominator = 1 << clock_shift;
+            let tick_frequency_denominator = if clock_divider == 0 {
+                // 0 is treated as 0.5, so divide by 2.
+                tick_frequency_denominator as f32 * 0.5
+            } else {
+                (clock_divider * tick_frequency_denominator) as f32
+            };
+
+            let tick_frequency = (262_144f32 / tick_frequency_denominator) as usize;
+            let tick_max_count = APU_FREQUENCY / tick_frequency;
+
+            self.ch4_tick_counter = (self.ch4_tick_counter + 1) % tick_max_count;
+            if self.ch4_tick_counter == 0 {
+                let next_bit = !((self.ch4_lsfr & 1) ^ ((self.ch4_lsfr >> 1) & 1)) & 1;
+
+                self.ch4_lsfr = self.ch4_lsfr & 0x7fff; // Turn off bit 15
+                self.ch4_lsfr |= next_bit << 15; // Write bit 15
+
+                // Also write bit 7
+                if lsfr_short_mode {
+                    self.ch4_lsfr = self.ch4_lsfr & 0xff7f; // Turn off bit 7
+                    self.ch4_lsfr |= next_bit << 7; // Write bit 7
+                }
+
+                self.ch4_lsfr >>= 1;
+            }
+        }
+
         fn sample_to_volume(sample: u8) -> f32 {
             ((0xf - sample) as f32 / 0xf as f32) * 2.0 - 1.0
         }
-        
+
         // Mixing
-        let step = (1024 * 1024) as f32 / 48_000f32;
+        let step = APU_FREQUENCY as f32 / self.sample_rate as f32;
         while self.accumulator > step {
             // Channel 1
             let ch1_dac_enabled = self.nr12 & 0xf8 != 0;
@@ -212,9 +283,9 @@ impl Apu {
                 } else {
                     0
                 };
-                
+
                 sample_to_volume(sample)
-            } else { 
+            } else {
                 0.0
             };
 
@@ -241,27 +312,58 @@ impl Apu {
                 0.0
             };
 
+            // Channel 3
+            let ch3_dac_enabled = self.nr30 & (1 << 7) != 0;
+            let ch3_sample = if ch3_dac_enabled && self.nr52 & (1 << 2) != 0 {
+                let wave_sample_pair = self.mem_read(0xff30 + (self.ch3_sample_counter >> 1) as u16);
+                let wave_sample = if self.ch3_sample_counter % 2 == 0 {
+                    wave_sample_pair >> 4
+                } else {
+                    wave_sample_pair & 0xf
+                };
+                
+                let output_level = match (self.nr32 >> 5) & 0x3 {
+                    0 => 0,
+                    1 => wave_sample,
+                    2 => wave_sample >> 1,
+                    3 => wave_sample >> 2,
+                    _ => unreachable!()
+                };
+                
+                sample_to_volume(output_level)
+            } else {
+                0.0
+            };
+
+            // Channel 4
+            let ch4_dac_enabled = self.nr42 & 0xf8 != 0;
+            let ch4_sample = if ch4_dac_enabled && self.nr52 & (1 << 3) != 0 && (self.ch4_lsfr & 1) != 0 {
+                sample_to_volume(self.ch4_volume)
+            } else {
+                0.0
+            };
+
             // let mixed_sample = ch1_sample + ch2_sample + 0f32 + 0f32;
             let sample_left =
                 ch1_sample * ((self.nr51 >> 4) & 1) as f32 +
                     ch2_sample * ((self.nr51 >> 5) & 1) as f32 +
-                    0.0 +
-                    0.0;
+                    ch3_sample * ((self.nr51 >> 6) & 1) as f32 +
+                    ch4_sample * ((self.nr51 >> 7) & 1) as f32;
             let sample_right =
                 ch1_sample * ((self.nr51 >> 0) & 1) as f32 +
                     ch2_sample * ((self.nr51 >> 1) & 1) as f32 +
-                    0.0 +
-                    0.0;
+                    ch3_sample * ((self.nr51 >> 2) & 1) as f32 +
+                    ch4_sample * ((self.nr51 >> 3) & 1) as f32;
 
             let volume_left = (1 + ((self.nr50 >> 4) & 7)) as f32 * 0.125;
             let volume_right = (1 + ((self.nr50 >> 0) & 7)) as f32 * 0.125;
 
-            self.buffer.push(sample_left * volume_left * 0.25);
-            self.buffer.push(sample_right * volume_right * 0.25);
-            
+            self.buffer.push(sample_left * volume_left * 0.25 * self.master_volume);
+            self.buffer.push(sample_right * volume_right * 0.25 * self.master_volume);
+
             self.accumulator -= step;
         }
-        
+
         self.accumulator += 1.0;
 
         self.div_prev = registers.div;
@@ -296,18 +398,13 @@ impl Apu {
 
             // Channel 4
             {
-                if self.nr42 & 0b1111_1000 == 0 {
-                    self.nr52 &= !(1 << 3);
-                } else if self.ch4_envelope_sweep_pace > 0 {
-                    let ch4_initial_volume = self.nr42 >> 4;
-                    let ch4_envelope_direction_increase = self.nr42 & 0b0000_1000 == 0;
-                    let ch4_sweep_pace = self.nr42 & 0b0000_0111;
-
+                if self.nr52 & (1 << 3) != 0 && self.ch4_envelope_sweep_pace > 0 {
                     self.ch4_envelope_sweep_counter = (self.ch4_envelope_sweep_counter + 1) % self.ch4_envelope_sweep_pace;
                     if self.ch4_envelope_sweep_counter == 0 {
-                        // TODO: Apply envelope.
+                        self.ch4_volume = self.ch4_volume.saturating_add_signed(self.ch4_envelope_sweep_direction_increase).min(0xf);
                     }
 
+                    let ch4_sweep_pace = self.nr42 & 0b0000_0111;
                     self.ch4_envelope_sweep_pace = ch4_sweep_pace;
                 }
             }
@@ -338,19 +435,19 @@ impl Apu {
 
             let ch3_length_timer_enable = self.nr34 & (1 << 6) != 0;
             if ch3_length_timer_enable {
-                self.nr31 = self.nr31.wrapping_sub(1);
+                self.ch3_length_timer = self.ch3_length_timer.wrapping_sub(1);
 
-                if self.nr31 == 0 {
+                if self.ch3_length_timer == 0 {
                     self.nr52 &= !(1 << 2);
                 }
             }
 
-            let ch4_length_timer_enable = self.nr41 & (1 << 6) != 0;
+            let ch4_length_timer_enable = self.nr44 & (1 << 6) != 0;
             if ch4_length_timer_enable {
-                self.nr41 = self.nr41.wrapping_sub(1);
+                self.ch4_length_timer = self.ch4_length_timer.wrapping_sub(1);
 
-                if self.nr41 == 0 {
-                    self.nr52 &= !(1 << 4);
+                if self.ch4_length_timer == 0 {
+                    self.nr52 &= !(1 << 3);
                 }
             }
         }
@@ -426,6 +523,7 @@ impl Mem for Apu {
                 self.nr14 = value;
 
                 if value & (1 << 7) != 0 {
+                    self.ch1_length_timer = self.nr11 & 0b0011_1111;
                     self.ch1_freq_sweep_pace = (self.nr10 & 0b0111_0000) >> 4;
                     self.ch1_freq_sweep_addition = self.nr10 & 0b0000_1000 == 0;
                     self.ch1_freq_sweep_slope = self.nr10 & 0b0000_0111;
@@ -439,13 +537,17 @@ impl Mem for Apu {
                     self.nr52 |= 1 << 0;
                 }
             }
-            0xff16 => self.nr21 = (value & 0b1100_0000) & (63 - (value & 0b0011_1111)), // Length timer is inverted when written and counts down.
+            0xff16 => {
+                self.nr21 = (value & 0b1100_0000) & (63 - (value & 0b0011_1111)); // Length timer is inverted when written and counts down.
+                self.ch2_length_timer = self.nr21 & 0b0011_1111;
+            }
             0xff17 => self.nr22 = value,
             0xff18 => self.nr23 = value,
             0xff19 => {
                 self.nr24 = value;
 
                 if value & (1 << 7) != 0 {
+                    self.ch2_length_timer = self.nr21 & 0b0011_1111;
                     self.ch2_envelope_sweep_direction_increase = if self.nr22 & 0b0000_1000 == 0 { -1 } else { 1 };
                     self.ch2_envelope_sweep_pace = self.nr22 & 0b0000_0011;
                     self.ch2_envelope_sweep_counter = 0;
@@ -459,11 +561,38 @@ impl Mem for Apu {
             0xff1b => self.nr31 = 255 - value,
             0xff1c => self.nr32 = value,
             0xff1d => self.nr33 = value,
-            0xff1e => self.nr34 = value,
-            0xff20 => self.nr41 = (value & 0b1100_0000) & (63 - value & 0b0011_1111), // Length timer is inverted when written and counts down.
+            0xff1e => {
+                self.nr34 = value;
+
+                if value & (1 << 7) != 0 {
+                    self.ch3_length_timer = self.nr31;
+                    self.ch3_period_counter = 0;
+                    self.ch3_sample_counter = 0;
+
+                    self.nr52 |= 1 << 2;
+                }
+            },
+            0xff20 => {
+                self.nr41 = 63 - (value & 0b0011_1111); // Length timer is inverted when written and counts down.
+                self.ch4_length_timer = self.nr41 & 0b0011_1111;
+            }
             0xff21 => self.nr42 = value,
             0xff22 => self.nr43 = value,
-            0xff23 => self.nr44 = value,
+            0xff23 => {
+                self.nr44 = value;
+
+                if value & (1 << 7) != 0 {
+                    self.ch4_length_timer = self.nr41 & 0b0011_1111;
+                    self.ch4_envelope_sweep_direction_increase = if self.nr42 & 0b0000_1000 == 0 { -1 } else { 1 };
+                    self.ch4_envelope_sweep_pace = self.nr42 & 0b0000_0011;
+                    self.ch4_envelope_sweep_counter = 0;
+                    self.ch4_tick_counter = 0;
+                    self.ch4_lsfr = 0;
+                    self.ch4_volume = self.nr42 >> 4;
+
+                    self.nr52 |= 1 << 3;
+                }
+            }
             0xff24 => self.nr50 = value,
             0xff25 => self.nr51 = value,
             0xff26 => self.nr52 = value & (1 << 7),
