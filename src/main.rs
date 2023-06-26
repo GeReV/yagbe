@@ -160,8 +160,8 @@ fn main() -> Result<(), String> {
         if cpu.run_to_frame(time_budget) {
             screen.with_lock(None, |buffer: &mut [u8], pitch: usize| {
                 for (index, &color) in cpu.bus.ppu.screen.iter().enumerate() {
-                    let x = (index % 160);
-                    let y = (index / 160);
+                    let x = index % 160;
+                    let y = index / 160;
 
                     let color = COLORS[color as usize];
 

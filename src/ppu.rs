@@ -171,7 +171,7 @@ impl PixelFetcher {
                 };
             }
             PushPixels { tile_byte_lo, tile_byte_hi } => {
-                if let Object { x, attributes, tile_index, .. } = self.mode {
+                if let Object { x, attributes, .. } = self.mode {
                     while self.obj_fifo.len() < 8 {
                         let current_bg_pixel = self.bg_fifo.get(self.obj_fifo.len()).unwrap();
 
@@ -413,9 +413,21 @@ impl Ppu {
             8
         };
 
+        if self.debug {
+            println!("{} {} {}: {}", registers.ly, self.screen_x, line_dot, registers.scx);
+        }
+
         match mode {
             0 => {
                 if line_dot == 0 {
+                    if lcd_enable {
+                        registers.ly += 1;
+                        
+                        if is_window_scanline {
+                            registers.window_ly += 1;
+                        }
+                    }
+                    
                     if registers.ly == 144 {
                         mode = 1;
 
@@ -532,14 +544,6 @@ impl Ppu {
 
                         if lcd_enable && registers.stat & (1 << 3) != 0 {
                             registers.interrupt_flag.insert(InterruptFlags::LCD_STAT);
-                        }
-
-                        if lcd_enable {
-                            if is_window_scanline {
-                                registers.window_ly = (registers.window_ly + 1) % 144;
-                            }
-
-                            registers.ly += 1;
                         }
 
                         // result = true;
