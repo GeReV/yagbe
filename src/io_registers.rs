@@ -113,11 +113,28 @@ impl Mem for IoRegisters {
 
     fn mem_write(&mut self, addr: u16, value: u8) {
         return match addr {
-            // NOTE: Values of JOYP are 0 for selected/pressed, so everything is inversed.
-            0xff00 => self.joyp = 0b1100_0000 | match value {
-                0x20 => 0x20 | self.joyp_directions,
-                0x10 => 0x10 | self.joyp_actions,
-                _ => self.joyp,
+            0xff00 => {
+                // NOTE: Values of JOYP are 0 for selected/pressed, so everything is inversed.
+                let prev_joy = self.joyp;
+                
+                self.joyp = 0b1100_0000 | match value {
+                    0x20 => 0x20 | self.joyp_directions,
+                    0x10 => 0x10 | self.joyp_actions,
+                    _ => self.joyp,
+                };
+                
+                if (self.joyp & 0b0011_0000) != 0 {
+                    for bit in 0..=3 {
+                        let mask = 1 << bit;
+                        
+                        // Joypad interrupt is set whenever joypad bits 0-3 go from high to low, when one of the selection bits (4-5) are set.
+                        if (prev_joy & mask) != 0 && (self.joyp & mask) == 0 {
+                            self.interrupt_flag.insert(InterruptFlags::JOYPAD);
+                            
+                            break;
+                        }
+                    }
+                }
             },
             0xff01 => self.sb = value,
             0xff02 => self.sc = value,
