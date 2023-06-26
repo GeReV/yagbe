@@ -1,6 +1,6 @@
-﻿# Yet Another GameBoy Emulator
+﻿# Yet Another Game Boy Emulator
 
-A simple GameBoy emulator in Rust, built as a practice project.
+A simple Game Boy emulator in Rust, built as a practice project.
 
 It was created as an attempt at building a working emulator based almost entirely on documentation on the console.
 
@@ -11,6 +11,16 @@ Emulators with built-in debuggers were also used as reference.
 
 The project makes use of very few external dependencies. The only used crates are the [Rust SDL2 bindings](https://github.com/Rust-SDL2/rust-sdl2) 
 and the [bitflags crate](https://docs.rs/bitflags/latest/bitflags/) for convenience.
+
+This emulator is far from fully featured and ignores, by design, some features and systems present in the Game Boy console
+and other emulator.
+
+- The emulator is not fully cycle-accurate.
+  - However, CPU instructions are cycle-accurate (ignoring memory timings)
+- Infrared and serial communication were ignored.
+- Only MBC1 (Memory Bank Controller) is implemented at the moment.
+- OAM corruption bug is ignored at the moment.
+- Memory access blocks are ignored (such as during pixel drawing).
 
 ## Resources used
 
@@ -64,4 +74,16 @@ by [@bugzmanov](https://github.com/bugzmanov/), to get a general idea of how an 
    Since some things were still unclear, I went to watch the rendering part in The Ultimate Game Boy Talk (linked above).
    
    While it clarified even more bits about the topic, it seems more changes are required.
+5. Programming the audio system was actually fairly straightforward, with a few interesting challenges, like trying to
+   get the timing of the channels right, and figuring out how to translate from the variable sample rate of the Game Boy 
+   system to a constant sample rate of 48000Hz.
+   
+   The audio still sounds harsh compared to that produced by Emulicious. My guess is that they either use something 
+   other than "pure" square waves, or have further processing, perhaps the high-pass filter mentioned in the docs has 
+   that affect.
+6. At the time of writing this point, it seems to me that the last remaining major issue has something to do with the 
+   timings of the rendering system, which is still not fully clear from all the documentation I've read so far.
+   
+   Considering finally taking a shortcut at this point and look into other source codes of emulators for this, but 
+   yet to be determined.
    
