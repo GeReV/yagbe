@@ -4,6 +4,7 @@ mod ppu;
 mod io_registers;
 mod cpu_registers;
 mod apu;
+mod pixel_fetcher;
 
 extern crate sdl2;
 
@@ -105,13 +106,14 @@ fn main() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let mut frame_delta = Duration::from_millis(16);
-    
+
     let mut show_fps = false;
 
     'running: loop {
         let mut time_budget = Duration::from_secs_f32(1.0 / 59.73);
 
         let previous_now = now;
+
 
         for event in event_pump.poll_iter() {
             match event {
@@ -126,6 +128,8 @@ fn main() -> Result<(), String> {
                 } => {
                     match keycode {
                         Keycode::F2 => show_fps = !show_fps,
+                        Keycode::F3 => cpu.bus.ppu.debug = !cpu.bus.ppu.debug,
+
                         Keycode::Down => cpu.bus.io_registers.joyp_directions &= !(1 << 3),
                         Keycode::Up => cpu.bus.io_registers.joyp_directions &= !(1 << 2),
                         Keycode::Left => cpu.bus.io_registers.joyp_directions &= !(1 << 1),
@@ -172,7 +176,7 @@ fn main() -> Result<(), String> {
                 }
             })?;
         }
-        
+
         // Draw screen
         canvas.copy(&screen, None, Some(Rect::new(0, 0, 160 * 2, 144 * 2)))?;
 
@@ -181,6 +185,10 @@ fn main() -> Result<(), String> {
         }
 
         canvas.present();
+
+        if cpu.bus.ppu.debug {
+            let x = 1;
+        }
 
         let sample_count_src = cpu.bus.apu.buffer.len();
         if sample_count_src > 0 {
@@ -205,7 +213,7 @@ fn main() -> Result<(), String> {
         }
 
         now = Instant::now();
-        
+
         frame_delta = now - previous_now;
     }
 
@@ -213,7 +221,7 @@ fn main() -> Result<(), String> {
 }
 
 fn render_text(font: &Font, canvas: &mut WindowCanvas, texture_creator: &TextureCreator<WindowContext>, text: &str, pos: Point) -> Result<(), String> {
-// render a surface, and convert it to a texture bound to the canvas
+    // render a surface, and convert it to a texture bound to the canvas
     let surface = font
         .render(text)
         .shaded(Color::RGBA(255, 255, 0, 255), Color::RGBA(0, 0, 0, 192))
@@ -226,5 +234,6 @@ fn render_text(font: &Font, canvas: &mut WindowCanvas, texture_creator: &Texture
 
     // Draw FPS
     canvas.copy(&texture, None, Some(Rect::new(pos.x, pos.y, width, height)))?;
+
     Ok(())
 }
