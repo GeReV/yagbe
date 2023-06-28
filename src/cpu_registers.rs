@@ -3,6 +3,7 @@ use std::fmt::Formatter;
 use bitflags::Flags;
 
 bitflags! {
+    #[derive(Copy, Clone)]
     pub struct CpuFlags : u8 {
         // In the documentation, flags are referred to in the order below.
         const ZERO = 1 << 7;
@@ -18,6 +19,7 @@ impl Default for CpuFlags {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct CpuRegisters {
     pub a: u8,
     pub f: CpuFlags,

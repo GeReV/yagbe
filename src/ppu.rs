@@ -1,5 +1,6 @@
 ﻿use std::cmp::Ordering;
 use bitflags::Flags;
+use crate::bus::{Bus};
 
 use crate::io_registers::{InterruptFlags, IoRegisters, LCDControl};
 use crate::Mem;
@@ -72,7 +73,6 @@ impl From<u8> for PpuMode {
 }
 
 pub struct Ppu {
-    pub debug: bool,
     pub dot_counter: usize,
     pub vram: Vram,
     sprites: Vec<Oam>,
@@ -80,13 +80,11 @@ pub struct Ppu {
     screen_x: u8,
     skipped_pixels: u8,
     pixel_fetcher: PixelFetcher,
-    prev_scx: u8,
 }
 
 impl Ppu {
     pub fn new() -> Ppu {
         Ppu {
-            debug: false,
             dot_counter: 0,
             vram: Vram::new(),
             sprites: Vec::with_capacity(10),
@@ -94,7 +92,6 @@ impl Ppu {
             screen_x: 0,
             skipped_pixels: 0,
             pixel_fetcher: PixelFetcher::new(),
-            prev_scx: 0,
         }
     }
 
@@ -119,7 +116,7 @@ impl Ppu {
             self.dot_counter = 0;
 
             result = true;
-
+            
             registers.ly = 0;
             registers.window_ly = 0;
 
@@ -315,21 +312,6 @@ impl Ppu {
                     }
                 }
             }
-            _ => unreachable!()
-        }
-
-        if self.prev_scx != registers.scx {
-            println!("{line_dot} {}: scx={:x}", registers.ly, registers.scx);
-        }
-
-        if registers.scx > 0 && registers.ly == 1 {
-            println!("offset");
-        }
-
-        self.prev_scx = registers.scx;
-
-        if self.debug {
-            // println!("{line_dot} {} {}", registers.ly, self.screen_x);
         }
 
         Some(mode)

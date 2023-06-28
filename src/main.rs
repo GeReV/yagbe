@@ -8,20 +8,14 @@ mod pixel_fetcher;
 
 extern crate sdl2;
 
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
-use sdl2::pixels::{Color, PixelFormatEnum};
+use std::fs;
 use std::time::{Duration, Instant};
+use std::io::Write;
+use sdl2::{event::Event, keyboard::Keycode, pixels::{Color, PixelFormatEnum}, audio::AudioSpecDesired, rect::{Point, Rect}, render::{Canvas, TextureCreator, TextureQuery, WindowCanvas}, ttf::Font, video::WindowContext, Sdl};
+use sdl2::messagebox::MessageBoxFlag;
 
 #[macro_use]
 extern crate bitflags;
-
-use std::fs;
-use sdl2::audio::AudioSpecDesired;
-use sdl2::rect::{Point, Rect};
-use sdl2::render::{Canvas, TextureCreator, TextureQuery, WindowCanvas};
-use sdl2::ttf::Font;
-use sdl2::video::WindowContext;
 
 
 pub(crate) trait Mem {
@@ -114,7 +108,6 @@ fn main() -> Result<(), String> {
 
         let previous_now = now;
 
-
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -128,7 +121,6 @@ fn main() -> Result<(), String> {
                 } => {
                     match keycode {
                         Keycode::F2 => show_fps = !show_fps,
-                        Keycode::F3 => cpu.bus.ppu.debug = !cpu.bus.ppu.debug,
 
                         Keycode::Down => cpu.bus.io_registers.joyp_directions &= !(1 << 3),
                         Keycode::Up => cpu.bus.io_registers.joyp_directions &= !(1 << 2),
@@ -185,10 +177,6 @@ fn main() -> Result<(), String> {
         }
 
         canvas.present();
-
-        if cpu.bus.ppu.debug {
-            let x = 1;
-        }
 
         let sample_count_src = cpu.bus.apu.buffer.len();
         if sample_count_src > 0 {

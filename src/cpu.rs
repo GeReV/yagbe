@@ -3,7 +3,7 @@ use std::io::Write;
 use std::time::Duration;
 pub use bitflags::Flags;
 use crate::Mem;
-use crate::bus::Bus;
+use crate::bus::{Bus};
 use crate::cpu_registers::{CpuFlags, CpuRegisters};
 use crate::io_registers::InterruptFlags;
 
@@ -36,17 +36,15 @@ pub struct Cpu {
     interrupts_master_enable: bool,
     registers: CpuRegisters,
     halted: bool,
-    logger: LineWriter<std::fs::File>,
 }
 
 impl Cpu {
-    pub fn new(writer: LineWriter<std::fs::File>) -> Self {
+    pub fn new() -> Self {
         Self {
             bus: Bus::new(),
             interrupts_master_enable: true,
             registers: Default::default(),
             halted: false,
-            logger: writer,
             accumulator: Duration::ZERO,
         }
     }
@@ -120,8 +118,6 @@ impl Cpu {
         if self.halted {
             return m_cycles;
         }
-
-        // writeln!(self.logger, "{}", self.registers).unwrap();
         
         let instruction = self.read_u8();
 
@@ -1428,7 +1424,7 @@ impl Cpu {
                     InterruptFlags::JOYPAD => 0x0060,
                     _ => unreachable!()
                 };
-
+                
                 self.call(handler_addr);
                 
                 handled = true;
@@ -1456,11 +1452,5 @@ impl Cpu {
 
     fn read_u16(&mut self) -> u16 {
         return u16::from_le_bytes([self.read_u8(), self.read_u8()]);
-    }
-}
-
-impl Drop for Cpu {
-    fn drop(&mut self) {
-        self.logger.flush().unwrap();
     }
 }
