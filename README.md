@@ -1,5 +1,8 @@
 ﻿# Yet Another Game Boy Emulator
 
+![screenshot1.png](.github%2Fscreenshot1.png)
+![screenshot2.png](.github%2Fscreenshot2.png)
+
 A simple Game Boy emulator in Rust, built as a practice project.
 
 It was created as an attempt at building a working emulator based almost entirely on documentation on the console.
