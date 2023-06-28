@@ -67,7 +67,7 @@ impl Cpu {
         self.accumulator += time_budget;
         
         loop {
-            let m_cycles = self.execute();
+            let m_cycles = self.tick();
             let t_cycles = m_cycles.t_cycles();
 
             self.accumulator = self.accumulator.saturating_sub(MCYCLE_DURATION * m_cycles.0 as u32);
@@ -88,7 +88,7 @@ impl Cpu {
         }
     }
 
-    fn execute(&mut self) -> MCycles {
+    fn tick(&mut self) -> MCycles {
         // Handle DMA copy sequence.
         if self.bus.io_registers.dma_counter > 0 {
             let src_base_addr = (self.bus.io_registers.dma as u16) << 8;

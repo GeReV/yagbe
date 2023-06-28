@@ -5,7 +5,7 @@ use crate::io_registers::{InterruptFlags, IoRegisters, LCDControl};
 use crate::Mem;
 use crate::pixel_fetcher::PixelFetcher;
 use crate::pixel_fetcher::PixelFetcherMode::{Object};
-use crate::ppu::PpuMode::{Drawing, HBlank, OamLookup, VBlank};
+use crate::ppu::PpuMode::{PixelTransfer, HBlank, OamLookup, VBlank};
 
 const VRAM_BASE_ADDR: u16 = 0x8000;
 const OAM_BASE_ADDR: u16 = 0xfe00;
@@ -56,7 +56,7 @@ enum PpuMode {
     HBlank = 0,
     VBlank,
     OamLookup,
-    Drawing,
+    PixelTransfer,
 }
 
 impl From<u8> for PpuMode {
@@ -65,7 +65,7 @@ impl From<u8> for PpuMode {
             0 => HBlank,
             1 => VBlank,
             2 => OamLookup,
-            3 => Drawing,
+            3 => PixelTransfer,
             _ => panic!("Invalid value: {}", value),
         }
     }
@@ -123,6 +123,8 @@ impl Ppu {
             registers.ly = 0;
             registers.window_ly = 0;
 
+            Self::set_lyc_interrupt(registers);
+
             registers.interrupt_flag.remove(InterruptFlags::VBLANK | InterruptFlags::LCD_STAT);
         }
 
@@ -131,8 +133,6 @@ impl Ppu {
 
     fn handle_step(&mut self, registers: &mut IoRegisters, lcd_enable: bool) -> Option<PpuMode> {
         if registers.lyc == registers.ly {
-            Self::set_lyc_interrupt(registers, lcd_enable);
-
             registers.stat = registers.stat | (1 << 2);
         } else {
             registers.stat = registers.stat & !(1 << 2);
@@ -158,6 +158,8 @@ impl Ppu {
                         if is_window_scanline {
                             registers.window_ly += 1;
                         }
+
+                        Self::set_lyc_interrupt(registers);
                     }
 
                     if registers.ly == 144 {
@@ -191,6 +193,8 @@ impl Ppu {
                     self.skipped_pixels = 0;
 
                     self.sprites.clear();
+
+                    Self::set_lyc_interrupt(registers);
                 }
 
                 registers.ly = (self.dot_counter / 456) as u8;
@@ -199,7 +203,7 @@ impl Ppu {
                 self.fetch_sprites(registers, line_dot);
 
                 if line_dot == 80 {
-                    mode = Drawing;
+                    mode = PixelTransfer;
 
                     self.screen_x = 0;
 
@@ -212,7 +216,7 @@ impl Ppu {
                     });
                 }
             }
-            Drawing => {
+            PixelTransfer => {
                 self.pixel_fetcher.tick(&self.vram, &registers);
 
                 if bg_enable {
@@ -331,8 +335,8 @@ impl Ppu {
         Some(mode)
     }
 
-    fn set_lyc_interrupt(registers: &mut IoRegisters, lcd_enable: bool) {
-        if lcd_enable && registers.stat & (1 << 2) == 0 && registers.stat & (1 << 6) != 0 {
+    fn set_lyc_interrupt(registers: &mut IoRegisters) {
+        if registers.stat & (1 << 2) != 0 && registers.stat & (1 << 6) != 0 {
             registers.interrupt_flag.insert(InterruptFlags::LCD_STAT);
         }
     }

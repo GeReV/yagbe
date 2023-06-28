@@ -123,7 +123,8 @@ impl Mem for IoRegisters {
                     _ => self.joyp,
                 };
                 
-                if (self.joyp & 0b0011_0000) != 0 {
+                // When either action or direction bits are on, but not both.
+                if (self.joyp & 0b0001_0000) ^ (self.joyp & 0b0010_0000) != 0 {
                     for bit in 0..=3 {
                         let mask = 1 << bit;
                         
