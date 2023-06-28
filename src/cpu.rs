@@ -1406,12 +1406,12 @@ impl Cpu {
             return false;
         }
 
-        self.interrupts_master_enable = false;
-
         let mut handled = false;
 
         for flag in InterruptFlags::all().iter() {
             if self.bus.io_registers.interrupt_enable.contains(flag) && self.bus.io_registers.interrupt_flag.contains(flag) {
+                self.interrupts_master_enable = false;
+                
                 self.halted = false;
                 
                 self.bus.io_registers.interrupt_flag.remove(flag);
@@ -1432,8 +1432,6 @@ impl Cpu {
                 break;
             }
         }
-
-        self.interrupts_master_enable = true;
 
         return handled;
     }
