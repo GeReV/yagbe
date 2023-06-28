@@ -90,15 +90,15 @@ impl Cpu {
         // Handle DMA copy sequence.
         if self.bus.io_registers.dma_counter > 0 {
             let src_base_addr = (self.bus.io_registers.dma as u16) << 8;
-            
-            let byte_index: u16 = 160 - self.bus.io_registers.dma_counter as u16;
-            
-            let v = self.bus.mem_read(src_base_addr + byte_index);
-            self.bus.mem_write(0xfe00 + byte_index, v);
-            
-            self.bus.io_registers.dma_counter -= 1;
-            
-            return MCycles(1);
+
+            for _ in 0..4 {
+                let byte_index: u16 = 160 - self.bus.io_registers.dma_counter as u16;
+
+                let v = self.bus.mem_read(src_base_addr + byte_index);
+                self.bus.mem_write(0xfe00 + byte_index, v);
+
+                self.bus.io_registers.dma_counter -= 1;
+            }
         }
         
         if self.interrupt_service_routine() {
