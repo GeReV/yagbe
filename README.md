@@ -16,7 +16,8 @@ This emulator is far from fully featured and ignores, by design, some features a
 and other emulator.
 
 - The emulator is not fully cycle-accurate.
-  - However, CPU instructions are cycle-accurate (ignoring memory timings)
+  - However, CPU instructions are cycle-accurate (ignoring memory timings).
+  - PPU rendering _should_ be cycle-accurate, as far as I can tell.
 - Infrared and serial communication were ignored.
 - Only MBC1 (Memory Bank Controller) is implemented at the moment.
 - OAM corruption bug is ignored at the moment.
@@ -33,6 +34,7 @@ by [@bugzmanov](https://github.com/bugzmanov/), to get a general idea of how an 
 - [Pan Docs](https://gbdev.github.io/pandocs/) - Used as the main reference for the entire console.
 - [Pan Docs Rendering Internals](https://github.com/gbdev/pandocs/blob/bbdc0ef79ba46dcc8183ad788b651ae25b52091d/src/Rendering_Internals.md) - No longer included in the full docs, but clarifies a few things about rendering.
 - [The Ultimate Game Boy Talk](https://media.ccc.de/v/33c3-8029-the_ultimate_game_boy_talk) by [Michael Steil](https://github.com/mist64) - Used mainly as another reference to understanding the Game Boy rendering.
+- [Coffee GB](https://github.com/trekawek/coffee-gb) - Once most systems were working, used as an example for a rewrite of the rendering system (which turns out unnecessary, see notes).
 
 #### CPU
 - [gb-opcodes](https://gbdev.github.io/gb-opcodes/optables/) - Table of CPU instructions, arranged by their hex representation.
@@ -86,4 +88,27 @@ by [@bugzmanov](https://github.com/bugzmanov/), to get a general idea of how an 
    
    Considering finally taking a shortcut at this point and look into other source codes of emulators for this, but 
    yet to be determined.
+7. Frustrated with the repeating rendering issues, I looked into the rendering source code of [Coffee GB](https://github.com/trekawek/coffee-gb),
+   a Game Boy emulator written in Java which tries to emulate the rendering hardware, 
+   same as this emulator (as opposed to skipping the hardware emulation and rendering tiles and sprites directly to a buffer).
    
+   Funny enough, I ran into the same issues I had in my own code and ended up with the exact same result, only now with 
+   cleaner code.
+   
+   At this point, I debugged a ROM of Super Mario Land and compared it to similar results from Emulicious.
+
+   This lead me to find bugs in the [OAM DMA transfer](https://gbdev.io/pandocs/OAM_DMA_Transfer.html) functionality and
+   a bug in the Interrupt Service Routine that allowed additional interrupts to run while one is already being handled.  
+   With those issues fixed, there still remains a small visual glitch during rendering, which is to be expected 
+   in actual devices, but made slightly worse in the emulator due to another small bug which I will fix later.
+
+## Future plans
+
+I consider all of these optional and may or may not get around to doing them.
+
+- Some code organization and cleanup.
+- Refactors and rewrites for systems like the CPU, for cleaner code.
+- Refactors for small bits, like giving some registers their own struct implementations.
+- Improve audio system to sound a bit less harsh.
+- Implement Game Boy Color?   
+  This part would take quite a bit of work, so I don't know if and when I'll decide to do it.
