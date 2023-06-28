@@ -37,34 +37,32 @@ const COLORS: [Color; 4] = [
 // ];
 
 fn main() -> Result<(), String> {
-    // let rom = fs::read("test\\cpu_instrs\\cpu_instrs.gb").unwrap();                          // Pass
-    // let rom = fs::read("test\\instr_timing\\instr_timing.gb").unwrap();                      // Pass
-    // let rom = fs::read("test\\interrupt_time\\interrupt_time.gb").unwrap();                  // Requires CGB
-    // let rom = fs::read("test\\mem_timing\\mem_timing.gb").unwrap();
-    // let rom = fs::read("test\\mem_timing\\individual\\01-read_timing.gb").unwrap();          
-    // let rom = fs::read("test\\mem_timing\\individual\\02-write_timing.gb").unwrap();
-    // let rom = fs::read("test\\mem_timing\\individual\\03-modify_timing.gb").unwrap();
-    // let rom = fs::read("test\\mem_timing-2\\mem_timing.gb").unwrap();
-    // let rom = fs::read("test\\mem_timing-2\\rom_singles\\01-read_timing.gb").unwrap();
-    // let rom = fs::read("test\\mem_timing-2\\rom_singles\\02-write_timing.gb").unwrap();
-    // let rom = fs::read("test\\mem_timing-2\\rom_singles\\03-modify_timing.gb").unwrap();
-    // let rom = fs::read("test\\dmg-acid2\\dmg-acid2.gb").unwrap();
-    let rom = fs::read("test\\mario.gb").unwrap();
-    // let rom = fs::read("test\\mario2.gb").unwrap();
-    // let rom = fs::read("test\\tetris.gb").unwrap();
-    // let rom = fs::read("test\\mooneye-test-suite-wilbertpol\\acceptance\\gpu\\intr_2_mode3_timing.gb").unwrap();
-    // let rom = fs::read("test\\mooneye-test-suite-wilbertpol\\acceptance\\gpu\\intr_2_oam_ok_timing.gb").unwrap();
-    // let rom = fs::read("test\\mooneye-test-suite-wilbertpol\\acceptance\\gpu\\intr_2_0_timing.gb").unwrap();
+    if let Err(msg) = run() {
+        sdl2::messagebox::show_simple_message_box(MessageBoxFlag::ERROR, "YAGBE", &msg, None)
+            .map_err(|err| err.to_string())?;
 
-    let file = fs::File::create("log.txt").unwrap();
-    let writer = std::io::LineWriter::with_capacity(512 * 1024 * 1024, file);
+        return Err(msg);
+    }
 
-    let mut cpu = cpu::Cpu::new(writer);
+    Ok(())
+}
 
-    cpu.load(rom);
+fn run() -> Result<(), String> {
+    let rom_path = std::env::args().nth(1).ok_or("Expected path to a ROM file")?;
+    let rom = fs::read(rom_path).map_err(|_| "Could not read ROM file")?;
 
     let sdl_context = sdl2::init()?;
     let video_subsystem = sdl_context.video()?;
+    let window = video_subsystem
+        .window("Yet Another GameBoy Emulator", 320, 288)
+        .position_centered()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut cpu = cpu::Cpu::new();
+
+    cpu.load(rom);
+
     let audio_subsystem = sdl_context.audio()?;
     let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string())?;
 
@@ -80,12 +78,6 @@ fn main() -> Result<(), String> {
 
     let device = audio_subsystem.open_queue::<f32, _>(None, &desired_spec)?;
     device.resume();
-
-    let window = video_subsystem
-        .window("Yet Another GameBoy Emulator", 320, 288)
-        .position_centered()
-        .build()
-        .map_err(|e| e.to_string())?;
 
     let mut canvas = window.into_canvas().build().map_err(|e| e.to_string())?;
     let texture_creator = canvas.texture_creator();
