@@ -371,6 +371,10 @@ impl Ppu {
                 let offset_y = registers.ly.wrapping_add(registers.scy) as u16 / 8;
 
                 let tile_map_row_addr = 0b1001_1000_0000_0000 | (bit_10 << 10) | offset_y << 5;
+                // TODO: It's possible for SCX (possibly SCY) to change mid frame under certain conditions. 
+                //  This causes a full-line glitch.
+                //  Need to change the fetcher to allow it to recalculate the tile offsets every 
+                //  iteration to reduce it to only a few pixels in a line.
                 let tile_offset_x = self.screen_x.wrapping_add(registers.scx) / 8;
                 let tile_row_offset = registers.ly.wrapping_add(registers.scy) % 8;
 
