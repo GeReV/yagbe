@@ -1,7 +1,30 @@
-﻿use crate::io_registers::IoRegisters;
+﻿use bitflags::Flags;
+use crate::io_registers::IoRegisters;
 use crate::Mem;
 
-const APU_FREQUENCY: usize = 1024 * 1024; // Hz 
+const APU_FREQUENCY: usize = 1024 * 1024; // Hz
+
+bitflags! {
+    /// Sound panning
+    /// Bit 7 - Mix channel 4 into left output
+    /// Bit 6 - Mix channel 3 into left output
+    /// Bit 5 - Mix channel 2 into left output
+    /// Bit 4 - Mix channel 1 into left output
+    /// Bit 3 - Mix channel 4 into right output
+    /// Bit 2 - Mix channel 3 into right output
+    /// Bit 1 - Mix channel 2 into right output
+    /// Bit 0 - Mix channel 1 into right output
+    pub struct SoundPanning : u8 {
+        const CH1_RIGHT = (1 << 0);
+        const CH2_RIGHT = (1 << 1);
+        const CH3_RIGHT = (1 << 2);
+        const CH4_RIGHT = (1 << 3);
+        const CH1_LEFT = (1 << 4);
+        const CH2_LEFT = (1 << 5);
+        const CH3_LEFT = (1 << 6);
+        const CH4_LEFT = (1 << 7);
+    }
+}
 
 pub struct Apu {
     accumulator: f32,
@@ -97,16 +120,7 @@ pub struct Apu {
     /// Bit 3   - Mix VIN into right output (1=Enable)
     /// Bit 2-0 - Right output volume       (0-7)
     pub nr50: u8,
-    /// Sound panning
-    /// Bit 7 - Mix channel 4 into left output
-    /// Bit 6 - Mix channel 3 into left output
-    /// Bit 5 - Mix channel 2 into left output
-    /// Bit 4 - Mix channel 1 into left output
-    /// Bit 3 - Mix channel 4 into right output
-    /// Bit 2 - Mix channel 3 into right output
-    /// Bit 1 - Mix channel 2 into right output
-    /// Bit 0 - Mix channel 1 into right output
-    pub nr51: u8,
+    pub nr51: SoundPanning,
     /// Sound on/off
     /// Bit 7 - All sound on/off  (0: turn the APU off) (Read/Write)
     /// Bit 3 - Channel 4 ON flag (Read Only)
@@ -174,7 +188,7 @@ impl Apu {
             ch4_lsfr: 0,
             ch4_volume: 0,
             nr50: 0x77,
-            nr51: 0xf3,
+            nr51: SoundPanning::from_bits_retain(0xf3),
             nr52: 0xf1,
             wave_ram: [0; 0x10],
         }
@@ -321,7 +335,7 @@ impl Apu {
                 } else {
                     wave_sample_pair & 0xf
                 };
-                
+
                 let output_level = match (self.nr32 >> 5) & 0x3 {
                     0 => 0,
                     1 => wave_sample,
@@ -329,7 +343,7 @@ impl Apu {
                     3 => wave_sample >> 2,
                     _ => unreachable!()
                 };
-                
+
                 sample_to_volume(output_level)
             } else {
                 0.0
@@ -343,17 +357,16 @@ impl Apu {
                 0.0
             };
 
-            // let mixed_sample = ch1_sample + ch2_sample + 0f32 + 0f32;
             let sample_left =
-                ch1_sample * ((self.nr51 >> 4) & 1) as f32 +
-                    ch2_sample * ((self.nr51 >> 5) & 1) as f32 +
-                    ch3_sample * ((self.nr51 >> 6) & 1) as f32 +
-                    ch4_sample * ((self.nr51 >> 7) & 1) as f32;
+                ch1_sample * self.nr51.contains(SoundPanning::CH1_LEFT) as u8 as f32 +
+                    ch2_sample * self.nr51.contains(SoundPanning::CH2_LEFT) as u8 as f32 +
+                    ch3_sample * self.nr51.contains(SoundPanning::CH3_LEFT) as u8 as f32 +
+                    ch4_sample * self.nr51.contains(SoundPanning::CH4_LEFT) as u8 as f32;
             let sample_right =
-                ch1_sample * ((self.nr51 >> 0) & 1) as f32 +
-                    ch2_sample * ((self.nr51 >> 1) & 1) as f32 +
-                    ch3_sample * ((self.nr51 >> 2) & 1) as f32 +
-                    ch4_sample * ((self.nr51 >> 3) & 1) as f32;
+                ch1_sample * self.nr51.contains(SoundPanning::CH1_RIGHT) as u8 as f32 +
+                    ch2_sample * self.nr51.contains(SoundPanning::CH2_RIGHT) as u8 as f32 +
+                    ch3_sample * self.nr51.contains(SoundPanning::CH3_RIGHT) as u8 as f32 +
+                    ch4_sample * self.nr51.contains(SoundPanning::CH4_RIGHT) as u8 as f32;
 
             let volume_left = (1 + ((self.nr50 >> 4) & 7)) as f32 * 0.125;
             let volume_right = (1 + ((self.nr50 >> 0) & 7)) as f32 * 0.125;
@@ -503,7 +516,7 @@ impl Mem for Apu {
             0xff22 => self.nr43,
             0xff23 => self.nr44 & (1 << 6),
             0xff24 => self.nr50,
-            0xff25 => self.nr51,
+            0xff25 => self.nr51.bits(),
             0xff26 => self.nr52,
             0xff30..=0xff3f => self.wave_ram[(addr - 0xff30) as usize],
             _ => unreachable!()
@@ -571,7 +584,7 @@ impl Mem for Apu {
 
                     self.nr52 |= 1 << 2;
                 }
-            },
+            }
             0xff20 => {
                 self.nr41 = 63 - (value & 0b0011_1111); // Length timer is inverted when written and counts down.
                 self.ch4_length_timer = self.nr41 & 0b0011_1111;
@@ -594,7 +607,7 @@ impl Mem for Apu {
                 }
             }
             0xff24 => self.nr50 = value,
-            0xff25 => self.nr51 = value,
+            0xff25 => self.nr51 = SoundPanning::from_bits_retain(value),
             0xff26 => self.nr52 = value & (1 << 7),
             0xff30..=0xff3f => self.wave_ram[(addr - 0xff30) as usize] = value,
             _ => unreachable!()
