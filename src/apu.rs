@@ -26,6 +26,22 @@ bitflags! {
     }
 }
 
+bitflags! {
+    /// Sound on/off
+    /// Bit 7 - All sound on/off  (0: turn the APU off) (Read/Write)
+    /// Bit 3 - Channel 4 ON flag (Read Only)
+    /// Bit 2 - Channel 3 ON flag (Read Only)
+    /// Bit 1 - Channel 2 ON flag (Read Only)
+    /// Bit 0 - Channel 1 ON flag (Read Only)
+    pub struct SoundEnable : u8 {
+        const CH1_ENABLE = (1 << 0);
+        const CH2_ENABLE = (1 << 1);
+        const CH3_ENABLE = (1 << 2);
+        const CH4_ENABLE = (1 << 3);
+        const SOUND_ENABLE = (1 << 7);
+    }
+}
+
 pub struct Apu {
     accumulator: f32,
     pub buffer: Vec<f32>,
@@ -121,13 +137,7 @@ pub struct Apu {
     /// Bit 2-0 - Right output volume       (0-7)
     pub nr50: u8,
     pub nr51: SoundPanning,
-    /// Sound on/off
-    /// Bit 7 - All sound on/off  (0: turn the APU off) (Read/Write)
-    /// Bit 3 - Channel 4 ON flag (Read Only)
-    /// Bit 2 - Channel 3 ON flag (Read Only)
-    /// Bit 1 - Channel 2 ON flag (Read Only)
-    /// Bit 0 - Channel 1 ON flag (Read Only)
-    pub nr52: u8,
+    pub nr52: SoundEnable,
     /// Wave pattern RAM
     pub wave_ram: [u8; 0x10],
 }
@@ -189,7 +199,7 @@ impl Apu {
             ch4_volume: 0,
             nr50: 0x77,
             nr51: SoundPanning::from_bits_retain(0xf3),
-            nr52: 0xf1,
+            nr52: SoundEnable::from_bits_retain(0xf1),
             wave_ram: [0; 0x10],
         }
     }
@@ -283,7 +293,7 @@ impl Apu {
         while self.accumulator > step {
             // Channel 1
             let ch1_dac_enabled = self.nr12 & 0xf8 != 0;
-            let ch1_sample = if ch1_dac_enabled && self.nr52 & (1 << 0) != 0 {
+            let ch1_sample = if ch1_dac_enabled && self.nr52.contains(SoundEnable::CH1_ENABLE) {
                 let wave_duty = match self.nr11 >> 6 {
                     0 => 1, // 12.5% of 8 samples
                     1 => 2, // 25% of 8 samples
@@ -305,7 +315,7 @@ impl Apu {
 
             // Channel 2
             let ch2_dac_enabled = self.nr22 & 0xf8 != 0;
-            let ch2_sample = if ch2_dac_enabled && self.nr52 & (1 << 1) != 0 {
+            let ch2_sample = if ch2_dac_enabled && self.nr52.contains(SoundEnable::CH2_ENABLE) {
                 // Push one sample
                 let wave_duty = match self.nr21 >> 6 {
                     0 => 1, // 12.5% of 8 samples
@@ -328,7 +338,7 @@ impl Apu {
 
             // Channel 3
             let ch3_dac_enabled = self.nr30 & (1 << 7) != 0;
-            let ch3_sample = if ch3_dac_enabled && self.nr52 & (1 << 2) != 0 {
+            let ch3_sample = if ch3_dac_enabled && self.nr52.contains(SoundEnable::CH3_ENABLE) {
                 let wave_sample_pair = self.mem_read(0xff30 + (self.ch3_sample_counter >> 1) as u16);
                 let wave_sample = if self.ch3_sample_counter % 2 == 0 {
                     wave_sample_pair >> 4
@@ -351,7 +361,7 @@ impl Apu {
 
             // Channel 4
             let ch4_dac_enabled = self.nr42 & 0xf8 != 0;
-            let ch4_sample = if ch4_dac_enabled && self.nr52 & (1 << 3) != 0 && (self.ch4_lsfr & 1) != 0 {
+            let ch4_sample = if ch4_dac_enabled && self.nr52.contains(SoundEnable::CH4_ENABLE) && (self.ch4_lsfr & 1) != 0 {
                 sample_to_volume(self.ch4_volume)
             } else {
                 0.0
@@ -388,7 +398,7 @@ impl Apu {
         if self.div_apu % 8 == 0 {
             // Channel 1
             {
-                if self.nr52 & (1 << 0) != 0 && self.ch1_envelope_sweep_pace > 0 {
+                if self.nr52.contains(SoundEnable::CH1_ENABLE) && self.ch1_envelope_sweep_pace > 0 {
                     self.ch1_envelope_sweep_counter = (self.ch1_envelope_sweep_counter + 1) % self.ch1_envelope_sweep_pace;
                     if self.ch1_envelope_sweep_pace > 0 && self.ch1_envelope_sweep_counter == 0 {
                         self.ch1_volume = self.ch1_volume.saturating_add_signed(self.ch1_envelope_sweep_direction_increase).min(0xf);
@@ -398,7 +408,7 @@ impl Apu {
 
             // Channel 2
             {
-                if self.nr52 & (1 << 1) != 0 && self.ch2_envelope_sweep_pace > 0 {
+                if self.nr52.contains(SoundEnable::CH2_ENABLE) && self.ch2_envelope_sweep_pace > 0 {
                     self.ch2_envelope_sweep_counter = (self.ch2_envelope_sweep_counter + 1) % self.ch2_envelope_sweep_pace;
                     if self.ch2_envelope_sweep_counter == 0 {
                         self.ch2_volume = self.ch2_volume.saturating_add_signed(self.ch2_envelope_sweep_direction_increase).min(0xf);
@@ -411,7 +421,7 @@ impl Apu {
 
             // Channel 4
             {
-                if self.nr52 & (1 << 3) != 0 && self.ch4_envelope_sweep_pace > 0 {
+                if self.nr52.contains(SoundEnable::CH4_ENABLE) && self.ch4_envelope_sweep_pace > 0 {
                     self.ch4_envelope_sweep_counter = (self.ch4_envelope_sweep_counter + 1) % self.ch4_envelope_sweep_pace;
                     if self.ch4_envelope_sweep_counter == 0 {
                         self.ch4_volume = self.ch4_volume.saturating_add_signed(self.ch4_envelope_sweep_direction_increase).min(0xf);
@@ -432,7 +442,7 @@ impl Apu {
 
                 if self.ch1_length_timer == 0 {
                     // Turn off channel 1
-                    self.nr52 &= !(1 << 0);
+                    self.nr52.remove(SoundEnable::CH1_ENABLE);
                 }
             }
 
@@ -441,8 +451,8 @@ impl Apu {
                 self.ch2_length_timer = self.ch2_length_timer.wrapping_sub(1);
 
                 if self.ch2_length_timer == 0 {
-                    // Turn off channel 1
-                    self.nr52 &= !(1 << 1);
+                    // Turn off channel 2
+                    self.nr52.remove(SoundEnable::CH2_ENABLE);
                 }
             }
 
@@ -451,16 +461,18 @@ impl Apu {
                 self.ch3_length_timer = self.ch3_length_timer.wrapping_sub(1);
 
                 if self.ch3_length_timer == 0 {
-                    self.nr52 &= !(1 << 2);
+                    // Turn off channel 3
+                    self.nr52.remove(SoundEnable::CH3_ENABLE);
                 }
             }
 
             let ch4_length_timer_enable = self.nr44 & (1 << 6) != 0;
             if ch4_length_timer_enable {
+                // Turn off channel 4
                 self.ch4_length_timer = self.ch4_length_timer.wrapping_sub(1);
 
                 if self.ch4_length_timer == 0 {
-                    self.nr52 &= !(1 << 3);
+                    self.nr52.remove(SoundEnable::CH4_ENABLE);
                 }
             }
         }
@@ -483,7 +495,7 @@ impl Apu {
                 self.nr14 = self.nr14 & 0b0000_0111 | (next_period >> 8) as u8;
 
                 if next_period > 0x7ff {
-                    self.nr52 &= !(1 << 0);
+                    self.nr52.remove(SoundEnable::CH1_ENABLE);
                 }
 
                 self.ch1_freq_sweep_pace = (self.nr10 & 0b0111_0000) >> 4;
@@ -517,7 +529,7 @@ impl Mem for Apu {
             0xff23 => self.nr44 & (1 << 6),
             0xff24 => self.nr50,
             0xff25 => self.nr51.bits(),
-            0xff26 => self.nr52,
+            0xff26 => self.nr52.bits(),
             0xff30..=0xff3f => self.wave_ram[(addr - 0xff30) as usize],
             _ => unreachable!()
         }
@@ -547,7 +559,7 @@ impl Mem for Apu {
                     self.ch1_duty_counter = 0;
                     self.ch1_volume = self.nr12 >> 4;
 
-                    self.nr52 |= 1 << 0;
+                    self.nr52.insert(SoundEnable::CH1_ENABLE);
                 }
             }
             0xff16 => {
@@ -567,7 +579,7 @@ impl Mem for Apu {
                     self.ch2_duty_counter = 0;
                     self.ch2_volume = self.nr22 >> 4;
 
-                    self.nr52 |= 1 << 1;
+                    self.nr52.insert(SoundEnable::CH2_ENABLE);
                 }
             }
             0xff1a => self.nr30 = value & (1 << 7),
@@ -582,7 +594,7 @@ impl Mem for Apu {
                     self.ch3_period_counter = 0;
                     self.ch3_sample_counter = 0;
 
-                    self.nr52 |= 1 << 2;
+                    self.nr52.insert(SoundEnable::CH3_ENABLE);
                 }
             }
             0xff20 => {
@@ -603,12 +615,12 @@ impl Mem for Apu {
                     self.ch4_lsfr = 0;
                     self.ch4_volume = self.nr42 >> 4;
 
-                    self.nr52 |= 1 << 3;
+                    self.nr52.insert(SoundEnable::CH4_ENABLE);
                 }
             }
             0xff24 => self.nr50 = value,
             0xff25 => self.nr51 = SoundPanning::from_bits_retain(value),
-            0xff26 => self.nr52 = value & (1 << 7),
+            0xff26 => self.nr52 = SoundEnable::from_bits_retain(value & (1 << 7)),
             0xff30..=0xff3f => self.wave_ram[(addr - 0xff30) as usize] = value,
             _ => unreachable!()
         }
