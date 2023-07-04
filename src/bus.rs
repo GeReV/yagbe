@@ -1,7 +1,7 @@
 ﻿use crate::apu::Apu;
 use crate::bus::BankingMode::{AdvancedRomOrRamBanking, Simple};
 use crate::io_registers::IoRegisters;
-use crate::Mem;
+use crate::cpu::Mem;
 use crate::ppu::Ppu;
 
 

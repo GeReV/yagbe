@@ -1,5 +1,5 @@
 ﻿use bitflags::Flags;
-use crate::Mem;
+use crate::cpu::Mem;
 
 bitflags! {
     #[derive(Default, Copy, Clone, PartialEq, Eq, Debug)]

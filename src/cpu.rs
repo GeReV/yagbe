@@ -2,7 +2,6 @@
 use std::io::Write;
 use std::time::Duration;
 pub use bitflags::Flags;
-use crate::Mem;
 use crate::bus::{Bus};
 use crate::cpu_registers::{CpuFlags, CpuRegisters};
 use crate::io_registers::InterruptFlags;
@@ -12,6 +11,11 @@ fn invalid_instruction() {
 }
 
 const MCYCLE_DURATION: Duration = Duration::from_nanos((1e9 / 1.048576e6) as u64);
+
+pub(crate) trait Mem {
+    fn mem_read(&self, addr: u16) -> u8;
+    fn mem_write(&mut self, addr: u16, value: u8);
+}
 
 #[derive(Clone, Copy)]
 pub struct MCycles(usize);

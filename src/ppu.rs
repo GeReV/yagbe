@@ -1,9 +1,9 @@
 ﻿use std::cmp::Ordering;
 use bitflags::Flags;
 use crate::bus::{Bus};
+use crate::cpu::Mem;
 
 use crate::io_registers::{InterruptFlags, IoRegisters, LCDControl};
-use crate::Mem;
 use crate::pixel_fetcher::PixelFetcher;
 use crate::pixel_fetcher::PixelFetcherMode::{Object};
 use crate::ppu::PpuMode::{PixelTransfer, HBlank, OamLookup, VBlank};

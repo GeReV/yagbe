@@ -1,6 +1,6 @@
 ﻿use bitflags::Flags;
+use crate::cpu::Mem;
 use crate::io_registers::IoRegisters;
-use crate::Mem;
 
 const APU_FREQUENCY: usize = 1024 * 1024; // Hz
 
