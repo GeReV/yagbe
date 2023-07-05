@@ -77,6 +77,7 @@ impl Bus {
 
         let bank_count = rom_size_bytes / 0x4000;
 
+        self.rom_current_bank = 1;
         self.rom_banks = Vec::with_capacity(bank_count);
         for i in 0..bank_count {
             let mut bank: [u8; 0x4000] = [0; 0x4000];
@@ -89,6 +90,7 @@ impl Bus {
 
         let cartridge_ram_bytes_total = cartridge_ram_size_kib(self.cartridge_ram_size_type) * 1024;
 
+        self.ram_enable = false;
         self.ram_banks = Vec::with_capacity(cartridge_ram_bytes_total / 0x2000);
         while self.ram_banks.len() < self.ram_banks.capacity() {
             self.ram_banks.push([0; 0x2000]);
