@@ -12,28 +12,21 @@ use std::{
     time::{Duration, Instant},
 };
 
-use sdl2::{
-    audio::AudioSpecDesired,
-    messagebox::MessageBoxFlag,
-    pixels::{Color, PixelFormatEnum},
-    rect::{Point, Rect},
-    render::{TextureCreator, TextureQuery, WindowCanvas},
-    ttf::Font,
-    video::Window,
-    video::WindowContext,
-};
+use sdl2::{audio::AudioSpecDesired, messagebox::MessageBoxFlag, pixels::{Color, PixelFormatEnum}, rect::{Point, Rect}, render::{TextureCreator, TextureQuery, WindowCanvas}, ttf::Font, video::Window, video::WindowContext, VideoSubsystem};
 use tao::{
     dpi::PhysicalSize,
     event::{DeviceEvent, Event, WindowEvent},
     event::{ElementState, RawKeyEvent},
     event_loop::{ControlFlow, EventLoop},
     keyboard::KeyCode,
-    menu::{MenuBar, MenuId, MenuItem, MenuItemAttributes},
     platform::run_return::EventLoopExtRunReturn,
     platform::windows::WindowExtWindows,
     window::WindowBuilder,
 };
-use crate::gameboy::{Buttons, GameBoy};
+use crate::{
+    gameboy::{Buttons, GameBoy},
+    menu::MENU_OPEN,
+};
 
 #[macro_use]
 extern crate bitflags;
@@ -53,8 +46,6 @@ const COLORS: [Color; 4] = [
 //     Color::RGB(0x33, 0x2c, 0x50),
 // ];
 
-const MENU_OPEN: MenuId = MenuId(1);
-
 fn main() -> Result<(), String> {
     if let Err(msg) = run() {
         sdl2::messagebox::show_simple_message_box(MessageBoxFlag::ERROR, "YAGBE", &msg, None)
@@ -67,24 +58,11 @@ fn main() -> Result<(), String> {
 }
 
 fn run() -> Result<(), String> {
-    let menu_height = unsafe {
-        use windows::{
-            Win32::Foundation::{RECT},
-            Win32::UI::WindowsAndMessaging::{AdjustWindowRectEx, WINDOW_EX_STYLE, WINDOW_STYLE},
-        };
-
-        let mut rect = RECT::default();
-
-        AdjustWindowRectEx(addr_of_mut!(rect), WINDOW_STYLE::default(), true, WINDOW_EX_STYLE::default());
-
-        rect.top.abs()
-    };
-
     let mut event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("Yet Another Game Boy Emulator")
         .with_menu(menu::build_menu())
-        .with_inner_size(PhysicalSize::new(320, 288 + menu_height))
+        .with_inner_size(PhysicalSize::new(320, 288 + menu_height()))
         .with_resizable(false)
         .build(&event_loop)
         .map_err(|e| e.to_string())?;
@@ -92,13 +70,9 @@ fn run() -> Result<(), String> {
     let sdl_context = sdl2::init()?;
     let video_subsystem = sdl_context.video()?;
 
-    let sdl_window = unsafe {
-        let sdl_window = sdl2::sys::SDL_CreateWindowFrom(window.hwnd());
+    let sdl_window = init_sdl_window(&window, video_subsystem);
 
-        Window::from_ll(video_subsystem.clone(), sdl_window)
-    };
-
-    let mut gameboy = gameboy::GameBoy::new();
+    let mut gameboy = GameBoy::new();
 
     if let Some(rom_path) = std::env::args().nth(1) {
         let rom = fs::read(rom_path).map_err(|_| "Could not read ROM file")?;
@@ -180,7 +154,7 @@ fn run() -> Result<(), String> {
             Event::MenuEvent { menu_id, .. } => match menu_id {
                 MENU_OPEN => {
                     open_rom(&mut gameboy).unwrap();
-                },
+                }
                 _ => {}
             }
             Event::MainEventsCleared => {
@@ -244,13 +218,36 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+fn menu_height() -> i32 {
+    use windows::{
+        Win32::Foundation::{RECT},
+        Win32::UI::WindowsAndMessaging::{AdjustWindowRectEx, WINDOW_EX_STYLE, WINDOW_STYLE},
+    };
+
+    let mut rect = RECT::default();
+
+    unsafe {
+        AdjustWindowRectEx(addr_of_mut!(rect), WINDOW_STYLE::default(), true, WINDOW_EX_STYLE::default());
+    }
+
+    rect.top.abs()
+}
+
+fn init_sdl_window(window: &tao::window::Window, video_subsystem: VideoSubsystem) -> Window {
+    unsafe {
+        let sdl_window = sdl2::sys::SDL_CreateWindowFrom(window.hwnd());
+
+        Window::from_ll(video_subsystem.clone(), sdl_window)
+    }
+}
+
 fn open_rom(gameboy: &mut GameBoy) -> Result<(), String> {
     if let Ok(rom_path) = dialog::open_file() {
         let rom = fs::read(rom_path).map_err(|_| "Could not read ROM file")?;
-        
+
         gameboy.load(rom);
     }
-    
+
     Ok(())
 }
 

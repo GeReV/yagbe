@@ -1,7 +1,8 @@
-﻿use tao::menu::{MenuBar, MenuItem, MenuItemAttributes};
-use crate::MENU_OPEN;
+﻿use tao::menu::{MenuBar, MenuId, MenuItem, MenuItemAttributes};
 
-pub fn build_menu() -> MenuBar {
+pub(crate) const MENU_OPEN: MenuId = MenuId(1);
+
+pub(crate) fn build_menu() -> MenuBar {
     let mut root = MenuBar::new();
     let mut file_menu = MenuBar::new();
 
