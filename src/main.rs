@@ -1,5 +1,6 @@
 mod dialog;
 mod gameboy;
+mod menu;
 
 extern crate sdl2;
 extern crate raw_window_handle;
@@ -82,7 +83,7 @@ fn run() -> Result<(), String> {
     let mut event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("Yet Another Game Boy Emulator")
-        .with_menu(build_menu())
+        .with_menu(menu::build_menu())
         .with_inner_size(PhysicalSize::new(320, 288 + menu_height))
         .with_resizable(false)
         .build(&event_loop)
@@ -251,18 +252,6 @@ fn open_rom(gameboy: &mut GameBoy) -> Result<(), String> {
     }
     
     Ok(())
-}
-
-fn build_menu() -> MenuBar {
-    let mut root = MenuBar::new();
-    let mut file_menu = MenuBar::new();
-
-    file_menu.add_item(MenuItemAttributes::new("&Open ROM file...").with_id(MENU_OPEN));
-    file_menu.add_native_item(MenuItem::Separator);
-    file_menu.add_native_item(MenuItem::Quit);
-    root.add_submenu("&File", true, file_menu);
-
-    return root;
 }
 
 fn render_text(font: &Font, canvas: &mut WindowCanvas, texture_creator: &TextureCreator<WindowContext>, text: &str, pos: Point) -> Result<(), String> {
