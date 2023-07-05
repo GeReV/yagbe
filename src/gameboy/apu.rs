@@ -1,6 +1,8 @@
 ﻿use bitflags::Flags;
-use crate::cpu::Mem;
-use crate::io_registers::IoRegisters;
+use super::{
+    io_registers::IoRegisters,
+    Mem,
+};
 
 const APU_FREQUENCY: usize = 1024 * 1024; // Hz
 
@@ -503,6 +505,10 @@ impl Apu {
                 self.ch1_freq_sweep_slope = self.nr10 & 0b0000_0111;
             }
         }
+    }
+
+    pub fn extract_audio_buffer(&mut self) -> Vec<f32> {
+        return std::mem::replace(&mut self.buffer, Vec::with_capacity(32_000));
     }
 }
 

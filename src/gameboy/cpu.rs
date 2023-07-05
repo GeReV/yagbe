@@ -1,23 +1,14 @@
-﻿use std::io::LineWriter;
-use std::io::Write;
-use std::time::Duration;
-pub use bitflags::Flags;
-use crate::bus::{Bus};
-use crate::cpu_registers::{CpuFlags, CpuRegisters};
-use crate::io_registers::InterruptFlags;
-
-fn invalid_instruction() {
-    // panic!("invalid instruction")
-}
-
-const MCYCLE_DURATION: Duration = Duration::from_nanos((1e9 / 1.048576e6) as u64);
-
-pub(crate) trait Mem {
-    fn mem_read(&self, addr: u16) -> u8;
-    fn mem_write(&mut self, addr: u16, value: u8);
-}
+﻿use std::time::Duration;
+use bitflags::Flags;
+use crate::gameboy::bus::Bus;
+use crate::gameboy::Mem;
+use super::{
+    cpu_registers::{CpuFlags, CpuRegisters},
+    io_registers::InterruptFlags
+};
 
 #[derive(Clone, Copy)]
+#[repr(transparent)]
 pub struct MCycles(usize);
 
 impl MCycles {
@@ -34,9 +25,17 @@ impl std::ops::Add for MCycles {
     }
 }
 
+impl Into<u32> for MCycles {
+    fn into(self) -> u32 {
+        self.0 as u32
+    }
+}
+
+fn invalid_instruction() {
+    // panic!("invalid instruction")
+}
+
 pub struct Cpu {
-    pub bus: Bus,
-    accumulator: Duration,
     interrupts_master_enable: bool,
     registers: CpuRegisters,
     halted: bool,
@@ -45,96 +44,57 @@ pub struct Cpu {
 impl Cpu {
     pub fn new() -> Self {
         Self {
-            bus: Bus::new(),
             interrupts_master_enable: true,
             registers: Default::default(),
             halted: false,
-            accumulator: Duration::ZERO,
         }
     }
 
-    pub fn load(&mut self, program: Vec<u8>) {
-        self.bus.load(program);
-    }
-
-    pub fn load_and_execute(&mut self, program: Vec<u8>) {
-        self.bus.load(program);
-
-        loop {
-            // self.execute();
-        }
-    }
-
-    pub fn run_to_frame(&mut self, time_budget: Duration) -> bool {
-        self.accumulator += time_budget;
-        
-        loop {
-            let m_cycles = self.tick();
-            let t_cycles = m_cycles.t_cycles();
-
-            self.accumulator = self.accumulator.saturating_sub(MCYCLE_DURATION * m_cycles.0 as u32);
-            
-            for _ in 0..t_cycles {
-                if self.bus.ppu.tick(&mut self.bus.io_registers) {
-                    return true;
-                }
-            }
-            
-            for _ in 0..m_cycles.0 {
-                self.bus.apu.tick(&self.bus.io_registers);
-            }
-            
-            if self.accumulator.is_zero() {
-                return false;
-            }
-        }
-    }
-
-    fn tick(&mut self) -> MCycles {
+    pub fn tick(&mut self, bus: &mut Bus) -> MCycles {
         // Handle DMA copy sequence.
-        if self.bus.io_registers.dma_counter > 0 {
-            let src_base_addr = (self.bus.io_registers.dma as u16) << 8;
+        if bus.io_registers.dma_counter > 0 {
+            let src_base_addr = (bus.io_registers.dma as u16) << 8;
 
             for _ in 0..4 {
-                let byte_index: u16 = 160 - self.bus.io_registers.dma_counter as u16;
+                let byte_index: u16 = 160 - bus.io_registers.dma_counter as u16;
 
-                let v = self.bus.mem_read(src_base_addr + byte_index);
-                self.bus.mem_write(0xfe00 + byte_index, v);
+                let v = bus.mem_read(src_base_addr + byte_index);
+                bus.mem_write(0xfe00 + byte_index, v);
 
-                self.bus.io_registers.dma_counter -= 1;
+                bus.io_registers.dma_counter -= 1;
             }
         }
         
-        if self.interrupt_service_routine() {
+        if self.interrupt_service_routine(bus) {
             return MCycles(5);
         };
 
-        let m_cycles = self.handle_instruction();
+        let m_cycles = self.handle_instruction(bus);
 
-        self.handle_timers(m_cycles);
+        self.handle_timers(bus, m_cycles);
 
         return m_cycles;
     }
 
-    fn handle_instruction(&mut self) -> MCycles {
+    fn handle_instruction(&mut self, bus: &mut Bus) -> MCycles {
         let mut m_cycles = MCycles(1);
 
         if self.halted {
             return m_cycles;
         }
         
-        let instruction = self.read_u8();
+        let instruction = self.read_u8(bus);
 
         match instruction {
             0x00 => {}
             0x01 => {
-                let value = self.read_u16();
+                let value = self.read_u16(bus);
                 self.registers.set_bc(value);
 
                 m_cycles = MCycles(3);
             }
             0x02 => {
-                self.bus.mem_write(self.registers.bc(), self.registers.a);
+                bus.mem_write(self.registers.bc(), self.registers.a);
 
                 m_cycles = MCycles(2);
             }
@@ -146,7 +106,7 @@ impl Cpu {
             0x04 => self.registers.b = self.inc_r8(self.registers.b),
             0x05 => self.registers.b = self.dec_r8(self.registers.b),
             0x06 => {
-                self.registers.b = self.read_u8();
+                self.registers.b = self.read_u8(bus);
 
                 m_cycles = MCycles(2);
             }
@@ -155,9 +115,9 @@ impl Cpu {
                 self.registers.f.remove(CpuFlags::ZERO);
             }
             0x08 => {
-                let addr = self.read_u16();
-                self.bus.mem_write(addr, (self.registers.sp & 0xff) as u8);
-                self.bus.mem_write(addr + 1, (self.registers.sp >> 8) as u8);
+                let addr = self.read_u16(bus);
+                bus.mem_write(addr, (self.registers.sp & 0xff) as u8);
+                bus.mem_write(addr + 1, (self.registers.sp >> 8) as u8);
 
                 m_cycles = MCycles(5);
             }
@@ -167,7 +127,7 @@ impl Cpu {
                 m_cycles = MCycles(2);
             }
             0x0a => {
-                self.registers.a = self.bus.mem_read(self.registers.bc());
+                self.registers.a = bus.mem_read(self.registers.bc());
 
                 m_cycles = MCycles(2);
             }
@@ -179,7 +139,7 @@ impl Cpu {
             0x0c => self.registers.c = self.inc_r8(self.registers.c),
             0x0d => self.registers.c = self.dec_r8(self.registers.c),
             0x0e => {
-                self.registers.c = self.read_u8();
+                self.registers.c = self.read_u8(bus);
 
                 m_cycles = MCycles(2);
             }
@@ -188,18 +148,18 @@ impl Cpu {
                 self.registers.f.remove(CpuFlags::ZERO);
             }
             0x10 => {
-                let _ = self.read_u8();
+                let _ = self.read_u8(bus);
 
-                self.bus.io_registers.cpu_clock = 0;
+                bus.io_registers.cpu_clock = 0;
             }
             0x11 => {
-                let value = self.read_u16();
+                let value = self.read_u16(bus);
                 self.registers.set_de(value);
 
                 m_cycles = MCycles(3);
             }
             0x12 => {
-                self.bus.mem_write(self.registers.de(), self.registers.a);
+                bus.mem_write(self.registers.de(), self.registers.a);
 
                 m_cycles = MCycles(2);
             }
@@ -212,7 +172,7 @@ impl Cpu {
             0x14 => self.registers.d = self.inc_r8(self.registers.d),
             0x15 => self.registers.d = self.dec_r8(self.registers.d),
             0x16 => {
-                self.registers.d = self.read_u8();
+                self.registers.d = self.read_u8(bus);
 
                 m_cycles = MCycles(2);
             }
@@ -221,7 +181,7 @@ impl Cpu {
                 self.registers.f.remove(CpuFlags::ZERO);
             }
             0x18 => {
-                let offset = self.read_i8();
+                let offset = self.read_i8(bus);
                 self.jr(offset);
 
                 m_cycles = MCycles(3);
@@ -232,7 +192,7 @@ impl Cpu {
                 m_cycles = MCycles(2);
             }
             0x1a => {
-                self.registers.a = self.bus.mem_read(self.registers.de());
+                self.registers.a = bus.mem_read(self.registers.de());
 
                 m_cycles = MCycles(2);
             }
@@ -244,7 +204,7 @@ impl Cpu {
             0x1c => self.registers.e = self.inc_r8(self.registers.e),
             0x1d => self.registers.e = self.dec_r8(self.registers.e),
             0x1e => {
-                self.registers.e = self.read_u8();
+                self.registers.e = self.read_u8(bus);
 
                 m_cycles = MCycles(2);
             }
@@ -253,7 +213,7 @@ impl Cpu {
                 self.registers.f.remove(CpuFlags::ZERO);
             }
             0x20 => {
-                let offset = self.read_i8();
+                let offset = self.read_i8(bus);
 
                 m_cycles = MCycles(2);
 
@@ -264,13 +224,13 @@ impl Cpu {
                 }
             }
             0x21 => {
-                let value = self.read_u16();
+                let value = self.read_u16(bus);
                 self.registers.set_hl(value);
 
                 m_cycles = MCycles(3);
             }
             0x22 => {
-                self.bus.mem_write(self.registers.hl(), self.registers.a);
+                bus.mem_write(self.registers.hl(), self.registers.a);
                 self.inc_hl();
 
                 m_cycles = MCycles(2);
@@ -283,13 +243,13 @@ impl Cpu {
             0x24 => self.registers.h = self.inc_r8(self.registers.h),
             0x25 => self.registers.h = self.dec_r8(self.registers.h),
             0x26 => {
-                self.registers.h = self.read_u8();
+                self.registers.h = self.read_u8(bus);
 
                 m_cycles = MCycles(2);
             }
             0x27 => self.daa(),
             0x28 => {
-                let offset = self.read_i8();
+                let offset = self.read_i8(bus);
 
                 m_cycles = MCycles(2);
 
@@ -305,7 +265,7 @@ impl Cpu {
                 m_cycles = MCycles(2);
             }
             0x2a => {
-                self.registers.a = self.bus.mem_read(self.registers.hl());
+                self.registers.a = bus.mem_read(self.registers.hl());
                 self.inc_hl();
 
                 m_cycles = MCycles(2);
@@ -318,7 +278,7 @@ impl Cpu {
             0x2c => self.registers.l = self.inc_r8(self.registers.l),
             0x2d => self.registers.l = self.dec_r8(self.registers.l),
             0x2e => {
-                self.registers.l = self.read_u8();
+                self.registers.l = self.read_u8(bus);
 
                 m_cycles = MCycles(2);
             }
@@ -327,7 +287,7 @@ impl Cpu {
                 self.registers.f.insert(CpuFlags::NEGATIVE | CpuFlags::HALF_CARRY);
             }
             0x30 => {
-                let offset = self.read_i8();
+                let offset = self.read_i8(bus);
 
                 m_cycles = MCycles(2);
 
@@ -338,12 +298,12 @@ impl Cpu {
                 }
             }
             0x31 => {
-                self.registers.sp = self.read_u16();
+                self.registers.sp = self.read_u16(bus);
 
                 m_cycles = MCycles(3);
             }
             0x32 => {
-                self.bus.mem_write(self.registers.hl(), self.registers.a);
+                bus.mem_write(self.registers.hl(), self.registers.a);
                 self.dec_hl();
 
                 m_cycles = MCycles(2);
@@ -355,33 +315,33 @@ impl Cpu {
             }
             0x34 => {
                 let addr = self.registers.hl();
-                let value = self.bus.mem_read(addr);
+                let value = bus.mem_read(addr);
                 let result = value.wrapping_add(1);
 
                 self.registers.f.set(CpuFlags::ZERO, result == 0);
                 self.registers.f.remove(CpuFlags::NEGATIVE);
                 self.registers.f.set(CpuFlags::HALF_CARRY, value & 0x0f == 0x0f);
 
-                self.bus.mem_write(addr, result);
+                bus.mem_write(addr, result);
 
                 m_cycles = MCycles(3);
             }
             0x35 => {
                 let addr = self.registers.hl();
-                let value = self.bus.mem_read(addr);
+                let value = bus.mem_read(addr);
                 let result = value.wrapping_sub(1);
 
                 self.registers.f.set(CpuFlags::ZERO, result == 0);
                 self.registers.f.insert(CpuFlags::NEGATIVE);
                 self.registers.f.set(CpuFlags::HALF_CARRY, value & 0x0f == 0);
 
-                self.bus.mem_write(addr, result);
+                bus.mem_write(addr, result);
 
                 m_cycles = MCycles(3);
             }
             0x36 => {
-                let value = self.read_u8();
-                self.bus.mem_write(self.registers.hl(), value);
+                let value = self.read_u8(bus);
+                bus.mem_write(self.registers.hl(), value);
 
                 m_cycles = MCycles(3);
             }
@@ -390,7 +350,7 @@ impl Cpu {
                 self.registers.f.remove(CpuFlags::NEGATIVE | CpuFlags::HALF_CARRY);
             }
             0x38 => {
-                let offset = self.read_i8();
+                let offset = self.read_i8(bus);
 
                 m_cycles = MCycles(2);
 
@@ -406,7 +366,7 @@ impl Cpu {
                 m_cycles = MCycles(2);
             }
             0x3a => {
-                self.registers.a = self.bus.mem_read(self.registers.hl());
+                self.registers.a = bus.mem_read(self.registers.hl());
                 self.dec_hl();
 
                 m_cycles = MCycles(2);
@@ -419,7 +379,7 @@ impl Cpu {
             0x3c => self.registers.a = self.inc_r8(self.registers.a),
             0x3d => self.registers.a = self.dec_r8(self.registers.a),
             0x3e => {
-                self.registers.a = self.read_u8();
+                self.registers.a = self.read_u8(bus);
 
                 m_cycles = MCycles(2);
             }
@@ -434,7 +394,7 @@ impl Cpu {
             0x44 => self.registers.b = self.registers.h,
             0x45 => self.registers.b = self.registers.l,
             0x46 => {
-                self.registers.b = self.bus.mem_read(self.registers.hl());
+                self.registers.b = bus.mem_read(self.registers.hl());
 
                 m_cycles = MCycles(2);
             }
@@ -446,7 +406,7 @@ impl Cpu {
             0x4c => self.registers.c = self.registers.h,
             0x4d => self.registers.c = self.registers.l,
             0x4e => {
-                self.registers.c = self.bus.mem_read(self.registers.hl());
+                self.registers.c = bus.mem_read(self.registers.hl());
 
                 m_cycles = MCycles(2);
             }
@@ -458,7 +418,7 @@ impl Cpu {
             0x54 => self.registers.d = self.registers.h,
             0x55 => self.registers.d = self.registers.l,
             0x56 => {
-                self.registers.d = self.bus.mem_read(self.registers.hl());
+                self.registers.d = bus.mem_read(self.registers.hl());
 
                 m_cycles = MCycles(2);
             }
@@ -470,7 +430,7 @@ impl Cpu {
             0x5c => self.registers.e = self.registers.h,
             0x5d => self.registers.e = self.registers.l,
             0x5e => {
-                self.registers.e = self.bus.mem_read(self.registers.hl());
+                self.registers.e = bus.mem_read(self.registers.hl());
 
                 m_cycles = MCycles(2);
             }
@@ -482,7 +442,7 @@ impl Cpu {
             0x64 => self.registers.h = self.registers.h,
             0x65 => self.registers.h = self.registers.l,
             0x66 => {
-                self.registers.h = self.bus.mem_read(self.registers.hl());
+                self.registers.h = bus.mem_read(self.registers.hl());
 
                 m_cycles = MCycles(2);
             }
@@ -494,44 +454,44 @@ impl Cpu {
             0x6c => self.registers.l = self.registers.h,
             0x6d => self.registers.l = self.registers.l,
             0x6e => {
-                self.registers.l = self.bus.mem_read(self.registers.hl());
+                self.registers.l = bus.mem_read(self.registers.hl());
 
                 m_cycles = MCycles(2);
             }
             0x6f => self.registers.l = self.registers.a,
             0x70 => {
-                self.bus.mem_write(self.registers.hl(), self.registers.b);
+                bus.mem_write(self.registers.hl(), self.registers.b);
 
                 m_cycles = MCycles(2);
             }
             0x71 => {
-                self.bus.mem_write(self.registers.hl(), self.registers.c);
+                bus.mem_write(self.registers.hl(), self.registers.c);
 
                 m_cycles = MCycles(2);
             }
             0x72 => {
-                self.bus.mem_write(self.registers.hl(), self.registers.d);
+                bus.mem_write(self.registers.hl(), self.registers.d);
 
                 m_cycles = MCycles(2);
             }
             0x73 => {
-                self.bus.mem_write(self.registers.hl(), self.registers.e);
+                bus.mem_write(self.registers.hl(), self.registers.e);
 
                 m_cycles = MCycles(2);
             }
             0x74 => {
-                self.bus.mem_write(self.registers.hl(), self.registers.h);
+                bus.mem_write(self.registers.hl(), self.registers.h);
 
                 m_cycles = MCycles(2);
             }
             0x75 => {
-                self.bus.mem_write(self.registers.hl(), self.registers.l);
+                bus.mem_write(self.registers.hl(), self.registers.l);
 
                 m_cycles = MCycles(2);
             }
             0x76 => self.halted = true,
             0x77 => {
-                self.bus.mem_write(self.registers.hl(), self.registers.a);
+                bus.mem_write(self.registers.hl(), self.registers.a);
 
                 m_cycles = MCycles(2);
             }
@@ -542,7 +502,7 @@ impl Cpu {
             0x7c => self.registers.a = self.registers.h,
             0x7d => self.registers.a = self.registers.l,
             0x7e => {
-                self.registers.a = self.bus.mem_read(self.registers.hl());
+                self.registers.a = bus.mem_read(self.registers.hl());
 
                 m_cycles = MCycles(2);
             }
@@ -554,7 +514,7 @@ impl Cpu {
             0x84 => self.registers.a = self.add(self.registers.a, self.registers.h),
             0x85 => self.registers.a = self.add(self.registers.a, self.registers.l),
             0x86 => {
-                self.registers.a = self.add(self.registers.a, self.bus.mem_read(self.registers.hl()));
+                self.registers.a = self.add(self.registers.a, bus.mem_read(self.registers.hl()));
 
                 m_cycles = MCycles(2);
             }
@@ -566,7 +526,7 @@ impl Cpu {
             0x8c => self.registers.a = self.adc(self.registers.a, self.registers.h),
             0x8d => self.registers.a = self.adc(self.registers.a, self.registers.l),
             0x8e => {
-                self.registers.a = self.adc(self.registers.a, self.bus.mem_read(self.registers.hl()));
+                self.registers.a = self.adc(self.registers.a, bus.mem_read(self.registers.hl()));
 
                 m_cycles = MCycles(2);
             }
@@ -578,7 +538,7 @@ impl Cpu {
             0x94 => self.registers.a = self.sub(self.registers.a, self.registers.h),
             0x95 => self.registers.a = self.sub(self.registers.a, self.registers.l),
             0x96 => {
-                self.registers.a = self.sub(self.registers.a, self.bus.mem_read(self.registers.hl()));
+                self.registers.a = self.sub(self.registers.a, bus.mem_read(self.registers.hl()));
 
                 m_cycles = MCycles(2);
             }
@@ -590,7 +550,7 @@ impl Cpu {
             0x9c => self.registers.a = self.sbc(self.registers.a, self.registers.h),
             0x9d => self.registers.a = self.sbc(self.registers.a, self.registers.l),
             0x9e => {
-                self.registers.a = self.sbc(self.registers.a, self.bus.mem_read(self.registers.hl()));
+                self.registers.a = self.sbc(self.registers.a, bus.mem_read(self.registers.hl()));
 
                 m_cycles = MCycles(2);
             }
@@ -602,7 +562,7 @@ impl Cpu {
             0xa4 => self.registers.a = self.and(self.registers.a, self.registers.h),
             0xa5 => self.registers.a = self.and(self.registers.a, self.registers.l),
             0xa6 => {
-                self.registers.a = self.and(self.registers.a, self.bus.mem_read(self.registers.hl()));
+                self.registers.a = self.and(self.registers.a, bus.mem_read(self.registers.hl()));
 
                 m_cycles = MCycles(2);
             }
@@ -614,7 +574,7 @@ impl Cpu {
             0xac => self.registers.a = self.xor(self.registers.a, self.registers.h),
             0xad => self.registers.a = self.xor(self.registers.a, self.registers.l),
             0xae => {
-                self.registers.a = self.xor(self.registers.a, self.bus.mem_read(self.registers.hl()));
+                self.registers.a = self.xor(self.registers.a, bus.mem_read(self.registers.hl()));
 
                 m_cycles = MCycles(2);
             }
@@ -626,7 +586,7 @@ impl Cpu {
             0xb4 => self.registers.a = self.or(self.registers.a, self.registers.h),
             0xb5 => self.registers.a = self.or(self.registers.a, self.registers.l),
             0xb6 => {
-                self.registers.a = self.or(self.registers.a, self.bus.mem_read(self.registers.hl()));
+                self.registers.a = self.or(self.registers.a, bus.mem_read(self.registers.hl()));
 
                 m_cycles = MCycles(2);
             }
@@ -638,7 +598,7 @@ impl Cpu {
             0xbc => self.cp(self.registers.a, self.registers.h),
             0xbd => self.cp(self.registers.a, self.registers.l),
             0xbe => {
-                self.cp(self.registers.a, self.bus.mem_read(self.registers.hl()));
+                self.cp(self.registers.a, bus.mem_read(self.registers.hl()));
 
                 m_cycles = MCycles(2);
             }
@@ -647,19 +607,19 @@ impl Cpu {
                 m_cycles = MCycles(2);
 
                 if !self.registers.f.contains(CpuFlags::ZERO) {
-                    self.ret();
+                    self.ret(bus);
 
                     m_cycles = MCycles(5);
                 }
             }
             0xc1 => {
-                let value = self.pop();
+                let value = self.pop(bus);
                 self.registers.set_bc(value);
 
                 m_cycles = MCycles(3);
             }
             0xc2 => {
-                let addr = self.read_u16();
+                let addr = self.read_u16(bus);
 
                 m_cycles = MCycles(3);
 
@@ -670,34 +630,34 @@ impl Cpu {
                 }
             }
             0xc3 => {
-                self.registers.pc = self.read_u16();
+                self.registers.pc = self.read_u16(bus);
 
                 m_cycles = MCycles(4);
             }
             0xc4 => {
-                let addr = self.read_u16();
+                let addr = self.read_u16(bus);
 
                 m_cycles = MCycles(3);
 
                 if !self.registers.f.contains(CpuFlags::ZERO) {
-                    self.call(addr);
+                    self.call(bus, addr);
 
                     m_cycles = MCycles(6);
                 }
             }
             0xc5 => {
-                self.push(self.registers.bc());
+                self.push(bus, self.registers.bc());
 
                 m_cycles = MCycles(4);
             }
             0xc6 => {
-                let value = self.read_u8();
+                let value = self.read_u8(bus);
                 self.registers.a = self.add(self.registers.a, value);
 
                 m_cycles = MCycles(2);
             }
             0xc7 => {
-                self.call(0x0000);
+                self.call(bus, 0x0000);
 
                 m_cycles = MCycles(4);
             }
@@ -705,18 +665,18 @@ impl Cpu {
                 m_cycles = MCycles(2);
 
                 if self.registers.f.contains(CpuFlags::ZERO) {
-                    self.ret();
+                    self.ret(bus);
 
                     m_cycles = MCycles(5);
                 }
             }
             0xc9 => {
-                self.ret();
+                self.ret(bus);
 
                 m_cycles = MCycles(4);
             }
             0xca => {
-                let addr = self.read_u16();
+                let addr = self.read_u16(bus);
 
                 m_cycles = MCycles(3);
 
@@ -727,34 +687,34 @@ impl Cpu {
                 }
             }
             0xcb => {
-                let value = self.read_u8();
-                m_cycles = self.cb(value);
+                let value = self.read_u8(bus);
+                m_cycles = self.cb(bus, value);
             }
             0xcc => {
-                let addr = self.read_u16();
+                let addr = self.read_u16(bus);
 
                 m_cycles = MCycles(3);
 
                 if self.registers.f.contains(CpuFlags::ZERO) {
-                    self.call(addr);
+                    self.call(bus, addr);
 
                     m_cycles = MCycles(6);
                 }
             }
             0xcd => {
-                let addr = self.read_u16();
-                self.call(addr);
+                let addr = self.read_u16(bus);
+                self.call(bus, addr);
 
                 m_cycles = MCycles(6);
             }
             0xce => {
-                let value = self.read_u8();
+                let value = self.read_u8(bus);
                 self.registers.a = self.adc(self.registers.a, value);
 
                 m_cycles = MCycles(2);
             }
             0xcf => {
-                self.call(0x0008);
+                self.call(bus, 0x0008);
 
                 m_cycles = MCycles(4);
             }
@@ -762,19 +722,19 @@ impl Cpu {
                 m_cycles = MCycles(2);
 
                 if !self.registers.f.contains(CpuFlags::CARRY) {
-                    self.ret();
+                    self.ret(bus);
 
                     m_cycles = MCycles(5);
                 }
             }
             0xd1 => {
-                let value = self.pop();
+                let value = self.pop(bus);
                 self.registers.set_de(value);
 
                 m_cycles = MCycles(3);
             }
             0xd2 => {
-                let addr = self.read_u16();
+                let addr = self.read_u16(bus);
 
                 m_cycles = MCycles(3);
 
@@ -786,29 +746,29 @@ impl Cpu {
             }
             0xd3 => invalid_instruction(),
             0xd4 => {
-                let addr = self.read_u16();
+                let addr = self.read_u16(bus);
 
                 m_cycles = MCycles(3);
 
                 if !self.registers.f.contains(CpuFlags::CARRY) {
-                    self.call(addr);
+                    self.call(bus, addr);
 
                     m_cycles = MCycles(6);
                 }
             }
             0xd5 => {
-                self.push(self.registers.de());
+                self.push(bus, self.registers.de());
 
                 m_cycles = MCycles(4);
             }
             0xd6 => {
-                let value = self.read_u8();
+                let value = self.read_u8(bus);
                 self.registers.a = self.sub(self.registers.a, value);
 
                 m_cycles = MCycles(2);
             }
             0xd7 => {
-                self.call(0x0010);
+                self.call(bus, 0x0010);
 
                 m_cycles = MCycles(4);
             }
@@ -816,18 +776,18 @@ impl Cpu {
                 m_cycles = MCycles(2);
 
                 if self.registers.f.contains(CpuFlags::CARRY) {
-                    self.ret();
+                    self.ret(bus);
 
                     m_cycles = MCycles(5);
                 }
             }
             0xd9 => {
-                self.reti();
+                self.reti(bus);
 
                 m_cycles = MCycles(4);
             }
             0xda => {
-                let addr = self.read_u16();
+                let addr = self.read_u16(bus);
 
                 m_cycles = MCycles(3);
 
@@ -839,65 +799,65 @@ impl Cpu {
             }
             0xdb => invalid_instruction(),
             0xdc => {
-                let addr = self.read_u16();
+                let addr = self.read_u16(bus);
 
                 m_cycles = MCycles(3);
 
                 if self.registers.f.contains(CpuFlags::CARRY) {
-                    self.call(addr);
+                    self.call(bus, addr);
 
                     m_cycles = MCycles(6);
                 }
             }
             0xdd => invalid_instruction(),
             0xde => {
-                let value = self.read_u8();
+                let value = self.read_u8(bus);
                 self.registers.a = self.sbc(self.registers.a, value);
 
                 m_cycles = MCycles(2);
             }
             0xdf => {
-                self.call(0x0018);
+                self.call(bus, 0x0018);
 
                 m_cycles = MCycles(4);
             }
             0xe0 => {
-                let value = self.read_u8();
-                self.bus.mem_write(0xff00 + value as u16, self.registers.a);
+                let value = self.read_u8(bus);
+                bus.mem_write(0xff00 + value as u16, self.registers.a);
 
                 m_cycles = MCycles(3);
             }
             0xe1 => {
-                let value = self.pop();
+                let value = self.pop(bus);
                 self.registers.set_hl(value);
 
                 m_cycles = MCycles(3);
             }
             0xe2 => {
-                self.bus.mem_write(0xff00 + self.registers.c as u16, self.registers.a);
+                bus.mem_write(0xff00 + self.registers.c as u16, self.registers.a);
 
                 m_cycles = MCycles(2);
             }
             0xe3 => invalid_instruction(),
             0xe4 => invalid_instruction(),
             0xe5 => {
-                self.push(self.registers.hl());
+                self.push(bus, self.registers.hl());
 
                 m_cycles = MCycles(4);
             }
             0xe6 => {
-                let value = self.read_u8();
+                let value = self.read_u8(bus);
                 self.registers.a = self.and(self.registers.a, value);
 
                 m_cycles = MCycles(2);
             }
             0xe7 => {
-                self.call(0x0020);
+                self.call(bus, 0x0020);
 
                 m_cycles = MCycles(4);
             }
             0xe8 => {
-                let value = self.read_i8() as u16;
+                let value = self.read_i8(bus) as u16;
 
                 // NOTE(grozki): I initially thought this u16::wrapping_add_signed() would work, but it doesn't work with the carry math below.
                 let result = self.registers.sp.wrapping_add(value);
@@ -912,8 +872,8 @@ impl Cpu {
             }
             0xe9 => self.registers.pc = self.registers.hl(),
             0xea => {
-                let addr = self.read_u16();
-                self.bus.mem_write(addr, self.registers.a);
+                let addr = self.read_u16(bus);
+                bus.mem_write(addr, self.registers.a);
 
                 m_cycles = MCycles(4);
             }
@@ -921,30 +881,30 @@ impl Cpu {
             0xec => invalid_instruction(),
             0xed => invalid_instruction(),
             0xee => {
-                let value = self.read_u8();
+                let value = self.read_u8(bus);
                 self.registers.a = self.xor(self.registers.a, value);
 
                 m_cycles = MCycles(2);
             }
             0xef => {
-                self.call(0x0028);
+                self.call(bus, 0x0028);
 
                 m_cycles = MCycles(4);
             }
             0xf0 => {
-                let offset = self.read_u8();
-                self.registers.a = self.bus.mem_read(0xff00 + offset as u16);
+                let offset = self.read_u8(bus);
+                self.registers.a = bus.mem_read(0xff00 + offset as u16);
 
                 m_cycles = MCycles(3);
             }
             0xf1 => {
-                let value = self.pop();
+                let value = self.pop(bus);
                 self.registers.set_af(value);
 
                 m_cycles = MCycles(3);
             }
             0xf2 => {
-                self.registers.a = self.bus.mem_read(0xff00 + self.registers.c as u16);
+                self.registers.a = bus.mem_read(0xff00 + self.registers.c as u16);
 
                 m_cycles = MCycles(2);
             }
@@ -952,23 +912,23 @@ impl Cpu {
             0xf4 => invalid_instruction(),
             0xf5 => {
                 let af = self.registers.af();
-                self.push(af);
+                self.push(bus, af);
 
                 m_cycles = MCycles(4);
             }
             0xf6 => {
-                let value = self.read_u8();
+                let value = self.read_u8(bus);
                 self.registers.a = self.or(self.registers.a, value);
 
                 m_cycles = MCycles(2);
             }
             0xf7 => {
-                self.call(0x0030);
+                self.call(bus, 0x0030);
 
                 m_cycles = MCycles(4);
             }
             0xf8 => {
-                let value = self.read_i8() as u16;
+                let value = self.read_i8(bus) as u16;
                 let result = self.registers.sp.wrapping_add(value);
 
                 self.registers.f.remove(CpuFlags::ZERO | CpuFlags::NEGATIVE);
@@ -985,8 +945,8 @@ impl Cpu {
                 m_cycles = MCycles(2);
             }
             0xfa => {
-                let addr = self.read_u16();
-                self.registers.a = self.bus.mem_read(addr);
+                let addr = self.read_u16(bus);
+                self.registers.a = bus.mem_read(addr);
 
                 m_cycles = MCycles(4);
             }
@@ -994,13 +954,13 @@ impl Cpu {
             0xfc => invalid_instruction(),
             0xfd => invalid_instruction(),
             0xfe => {
-                let value = self.read_u8();
+                let value = self.read_u8(bus);
                 self.cp(self.registers.a, value);
 
                 m_cycles = MCycles(2);
             }
             0xff => {
-                self.call(0x0038);
+                self.call(bus, 0x0038);
 
                 m_cycles = MCycles(4);
             }
@@ -1010,7 +970,7 @@ impl Cpu {
         return m_cycles;
     }
 
-    fn cb(&mut self, value: u8) -> MCycles {
+    fn cb(&mut self, bus: &mut Bus, value: u8) -> MCycles {
         let register_value = match value & 0x7 {
             0x0 => self.registers.b,
             0x1 => self.registers.c,
@@ -1018,7 +978,7 @@ impl Cpu {
             0x3 => self.registers.e,
             0x4 => self.registers.h,
             0x5 => self.registers.l,
-            0x6 => self.bus.mem_read(self.registers.hl()),
+            0x6 => bus.mem_read(self.registers.hl()),
             0x7 => self.registers.a,
             _ => unreachable!()
         };
@@ -1049,7 +1009,7 @@ impl Cpu {
                 0x3 => self.registers.e = result,
                 0x4 => self.registers.h = result,
                 0x5 => self.registers.l = result,
-                0x6 => self.bus.mem_write(self.registers.hl(), result),
+                0x6 => bus.mem_write(self.registers.hl(), result),
                 0x7 => self.registers.a = result,
                 _ => unreachable!()
             };
@@ -1064,16 +1024,16 @@ impl Cpu {
         return m_cycles;
     }
 
-    fn handle_timers(&mut self, m_cycles: MCycles) {
+    fn handle_timers(&mut self, bus: &mut Bus, m_cycles: MCycles) {
         let t_cycles = m_cycles.t_cycles();
 
-        self.bus.io_registers.cpu_clock = self.bus.io_registers.cpu_clock.wrapping_add(t_cycles as u16);
+        bus.io_registers.cpu_clock = bus.io_registers.cpu_clock.wrapping_add(t_cycles as u16);
 
-        self.bus.io_registers.div = (self.bus.io_registers.cpu_clock >> 8) as u8 % 64;
+        bus.io_registers.div = (bus.io_registers.cpu_clock >> 8) as u8 % 64;
 
-        let timer_enable = self.bus.io_registers.tac & 0b0000_0100 != 0;
+        let timer_enable = bus.io_registers.tac & 0b0000_0100 != 0;
 
-        let timer_update_freq = match self.bus.io_registers.tac & 0b0000_0011 {
+        let timer_update_freq = match bus.io_registers.tac & 0b0000_0011 {
             0 => 1024, // CPU clock / 1024
             1 => 16, // CPU clock / 16
             2 => 64, // CPU clock / 64
@@ -1082,19 +1042,19 @@ impl Cpu {
         };
 
         if timer_enable {
-            self.bus.io_registers.clock_accumulator += t_cycles;
+            bus.io_registers.clock_accumulator += t_cycles;
 
-            while self.bus.io_registers.clock_accumulator >= timer_update_freq {
-                self.bus.io_registers.clock_accumulator -= timer_update_freq;
+            while bus.io_registers.clock_accumulator >= timer_update_freq {
+                bus.io_registers.clock_accumulator -= timer_update_freq;
 
-                let (tima, reset) = self.bus.io_registers.tima.overflowing_add(1);
+                let (tima, reset) = bus.io_registers.tima.overflowing_add(1);
 
-                self.bus.io_registers.tima = tima;
+                bus.io_registers.tima = tima;
 
                 if reset {
-                    self.bus.io_registers.tima = self.bus.io_registers.tma;
+                    bus.io_registers.tima = bus.io_registers.tma;
 
-                    self.bus.io_registers.interrupt_flag.insert(InterruptFlags::TIMER);
+                    bus.io_registers.interrupt_flag.insert(InterruptFlags::TIMER);
                 }
             }
         }
@@ -1361,49 +1321,49 @@ impl Cpu {
         self.registers.pc = self.registers.pc.wrapping_add_signed(offset as i16);
     }
 
-    fn ret(&mut self) {
-        self.registers.pc = self.pop();
+    fn ret(&mut self, bus: &mut Bus) {
+        self.registers.pc = self.pop(bus);
     }
 
-    fn reti(&mut self) {
-        self.ret();
+    fn reti(&mut self, bus: &mut Bus) {
+        self.ret(bus);
 
         self.interrupts_master_enable = true;
     }
 
-    fn pop(&mut self) -> u16 {
-        let lo = self.bus.mem_read(self.registers.sp);
+    fn pop(&mut self, bus: &mut Bus) -> u16 {
+        let lo = bus.mem_read(self.registers.sp);
 
         self.registers.sp = self.registers.sp.wrapping_add(1);
 
-        let hi = self.bus.mem_read(self.registers.sp);
+        let hi = bus.mem_read(self.registers.sp);
 
         self.registers.sp = self.registers.sp.wrapping_add(1);
 
         return u16::from_be_bytes([hi, lo]);
     }
 
-    fn push(&mut self, register_value: u16) {
+    fn push(&mut self, bus: &mut Bus, register_value: u16) {
         self.registers.sp = self.registers.sp.wrapping_sub(2);
 
-        self.bus.mem_write(self.registers.sp + 0, (register_value & 0xff) as u8);
-        self.bus.mem_write(self.registers.sp + 1, (register_value >> 8) as u8);
+        bus.mem_write(self.registers.sp + 0, (register_value & 0xff) as u8);
+        bus.mem_write(self.registers.sp + 1, (register_value >> 8) as u8);
     }
 
-    fn call(&mut self, addr: u16) {
+    fn call(&mut self, bus: &mut Bus, addr: u16) {
         self.registers.sp = self.registers.sp.wrapping_sub(2);
 
-        self.bus.mem_write(self.registers.sp, (self.registers.pc & 0xff) as u8);
-        self.bus.mem_write(self.registers.sp.wrapping_add(1), (self.registers.pc >> 8 & 0xff) as u8);
+        bus.mem_write(self.registers.sp, (self.registers.pc & 0xff) as u8);
+        bus.mem_write(self.registers.sp.wrapping_add(1), (self.registers.pc >> 8 & 0xff) as u8);
 
         self.registers.pc = addr;
     }
 
-    fn interrupt_service_routine(&mut self) -> bool {
+    fn interrupt_service_routine(&mut self, bus: &mut Bus) -> bool {
         if !self.interrupts_master_enable {
             // If IME is not set, CPU returns to normal operation from HALT as soon as an interrupt is pending.
             // The pending interrupt is not handled.
-            if self.bus.io_registers.interrupt_enable.bits() & self.bus.io_registers.interrupt_flag.bits() != 0 {
+            if bus.io_registers.interrupt_enable.bits() & bus.io_registers.interrupt_flag.bits() != 0 {
                 self.halted = false;
             }
 
@@ -1413,12 +1373,12 @@ impl Cpu {
         let mut handled = false;
 
         for flag in InterruptFlags::all().iter() {
-            if self.bus.io_registers.interrupt_enable.contains(flag) && self.bus.io_registers.interrupt_flag.contains(flag) {
+            if bus.io_registers.interrupt_enable.contains(flag) && bus.io_registers.interrupt_flag.contains(flag) {
                 self.interrupts_master_enable = false;
                 
                 self.halted = false;
                 
-                self.bus.io_registers.interrupt_flag.remove(flag);
+                bus.io_registers.interrupt_flag.remove(flag);
 
                 let handler_addr = match flag {
                     InterruptFlags::VBLANK => 0x0040,
@@ -1429,7 +1389,7 @@ impl Cpu {
                     _ => unreachable!()
                 };
                 
-                self.call(handler_addr);
+                self.call(bus, handler_addr);
                 
                 handled = true;
                 
@@ -1440,19 +1400,19 @@ impl Cpu {
         return handled;
     }
 
-    fn read_u8(&mut self) -> u8 {
+    fn read_u8(&mut self, bus: &mut Bus) -> u8 {
         let addr = self.registers.pc;
 
         self.registers.pc = self.registers.pc.wrapping_add(1);
 
-        return self.bus.mem_read(addr);
+        return bus.mem_read(addr);
     }
 
-    fn read_i8(&mut self) -> i8 {
-        return self.read_u8() as i8;
+    fn read_i8(&mut self, bus: &mut Bus) -> i8 {
+        return self.read_u8(bus) as i8;
     }
 
-    fn read_u16(&mut self) -> u16 {
-        return u16::from_le_bytes([self.read_u8(), self.read_u8()]);
+    fn read_u16(&mut self, bus: &mut Bus) -> u16 {
+        return u16::from_le_bytes([self.read_u8(bus), self.read_u8(bus)]);
     }
 }

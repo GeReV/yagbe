@@ -1,10 +1,12 @@
 ﻿use std::collections::VecDeque;
 use bitflags::Flags;
-use crate::io_registers::{IoRegisters, LCDControl};
-use crate::pixel_fetcher::PixelFetcherMode::{Background, Object};
-use crate::pixel_fetcher::PixelFetcherState::{GetSpriteAttributes, GetTileId, GetTileRowHigh, GetTileRowLow, PushPixels};
-use crate::ppu::{Oam, Vram};
-use crate::cpu::Mem;
+use crate::gameboy::Mem;
+use super::{
+    ppu::{Oam, Vram},
+    pixel_fetcher::PixelFetcherState::{GetSpriteAttributes, GetTileId, GetTileRowHigh, GetTileRowLow, PushPixels},
+    pixel_fetcher::PixelFetcherMode::{Background, Object},
+    io_registers::{IoRegisters, LCDControl},
+};
 
 /// Memory Map
 /// 0000	3FFF	16 KiB ROM bank 00	From cartridge, usually a fixed bank

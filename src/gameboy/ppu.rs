@@ -1,12 +1,13 @@
 ﻿use std::cmp::Ordering;
 use bitflags::Flags;
-use crate::bus::{Bus};
-use crate::cpu::Mem;
 
-use crate::io_registers::{InterruptFlags, IoRegisters, LCDControl};
-use crate::pixel_fetcher::PixelFetcher;
-use crate::pixel_fetcher::PixelFetcherMode::{Object};
-use crate::ppu::PpuMode::{PixelTransfer, HBlank, OamLookup, VBlank};
+use super::{
+    io_registers::{InterruptFlags, IoRegisters, LCDControl},
+    pixel_fetcher::PixelFetcher,
+    pixel_fetcher::PixelFetcherMode::{Object},
+    ppu::PpuMode::{PixelTransfer, HBlank, OamLookup, VBlank},
+    Mem,
+};
 
 const VRAM_BASE_ADDR: u16 = 0x8000;
 const OAM_BASE_ADDR: u16 = 0xfe00;
@@ -116,7 +117,7 @@ impl Ppu {
             self.dot_counter = 0;
 
             result = true;
-            
+
             registers.ly = 0;
             registers.window_ly = 0;
 

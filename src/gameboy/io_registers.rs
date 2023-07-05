@@ -1,5 +1,5 @@
 ﻿use bitflags::Flags;
-use crate::cpu::Mem;
+use super::Mem;
 
 bitflags! {
     #[derive(Default, Copy, Clone, PartialEq, Eq, Debug)]
@@ -69,6 +69,55 @@ pub struct IoRegisters {
     pub opri: u8,
     pub svbk: u8,
     pub interrupt_enable: InterruptFlags,
+}
+
+impl IoRegisters {
+    pub fn new() -> Self {
+        Self {
+            // https://gbdev.io/pandocs/Power_Up_Sequence.html
+            joyp_directions: 0x0f,
+            joyp_actions: 0x0f,
+            joyp: 0xcf,
+            sb: 0x00,
+            sc: 0x7e,
+            div: 0xab,
+            cpu_clock: 0,
+            tima: 0x00,
+            clock_accumulator: 0,
+            tma: 0x00,
+            tac: 0xf8,
+            interrupt_flag: InterruptFlags::from_bits_retain(0xe1),
+            lcdc: LCDControl::from_bits_retain(0x91),
+            stat: 0x85,
+            scy: 0x00,
+            scx: 0x00,
+            ly: 0x00,
+            lyc: 0x00,
+            dma: 0xff,
+            dma_counter: 0,
+            bgp: 0xfc,
+            obp0: 0x00,
+            obp1: 0x00,
+            wy: 0x00,
+            window_ly: 0,
+            wx: 0x00,
+            key1: 0xff,
+            vbk: 0xff,
+            hdma1: 0xff,
+            hdma2: 0xff,
+            hdma3: 0xff,
+            hdma4: 0xff,
+            hdma5: 0xff,
+            rp: 0xff,
+            bcps: 0xff,
+            bcpd: 0xff,
+            ocps: 0xff,
+            ocpd: 0xff,
+            opri: 0xff, // Unknown value on power-up. Extrapolating.
+            svbk: 0xff,
+            interrupt_enable: InterruptFlags::from_bits_retain(0x00),
+        }
+    }
 }
 
 impl Mem for IoRegisters {
@@ -193,54 +242,5 @@ impl Mem for IoRegisters {
             0xffff => self.interrupt_enable = InterruptFlags::from_bits_retain(0b1110_0000 | value),
             _ => {} // panic!("invalid IO register address")
         };
-    }
-}
-
-impl IoRegisters {
-    pub fn new() -> Self {
-        Self {
-            // https://gbdev.io/pandocs/Power_Up_Sequence.html
-            joyp_directions: 0x0f,
-            joyp_actions: 0x0f,
-            joyp: 0xcf,
-            sb: 0x00,
-            sc: 0x7e,
-            div: 0xab,
-            cpu_clock: 0,
-            tima: 0x00,
-            clock_accumulator: 0,
-            tma: 0x00,
-            tac: 0xf8,
-            interrupt_flag: InterruptFlags::from_bits_retain(0xe1),
-            lcdc: LCDControl::from_bits_retain(0x91),
-            stat: 0x85,
-            scy: 0x00,
-            scx: 0x00,
-            ly: 0x00,
-            lyc: 0x00,
-            dma: 0xff,
-            dma_counter: 0,
-            bgp: 0xfc,
-            obp0: 0x00,
-            obp1: 0x00,
-            wy: 0x00,
-            window_ly: 0,
-            wx: 0x00,
-            key1: 0xff,
-            vbk: 0xff,
-            hdma1: 0xff,
-            hdma2: 0xff,
-            hdma3: 0xff,
-            hdma4: 0xff,
-            hdma5: 0xff,
-            rp: 0xff,
-            bcps: 0xff,
-            bcpd: 0xff,
-            ocps: 0xff,
-            ocpd: 0xff,
-            opri: 0xff, // Unknown value on power-up. Extrapolating.
-            svbk: 0xff,
-            interrupt_enable: InterruptFlags::from_bits_retain(0x00),
-        }
     }
 }

@@ -1,9 +1,11 @@
-﻿use crate::apu::Apu;
-use crate::bus::BankingMode::{AdvancedRomOrRamBanking, Simple};
-use crate::io_registers::IoRegisters;
-use crate::cpu::Mem;
-use crate::ppu::Ppu;
-
+﻿use super::{
+    apu::Apu,
+    bus::BankingMode::{AdvancedRomOrRamBanking, Simple},
+    cpu::Cpu,
+    io_registers::IoRegisters,
+    Mem,
+    ppu::Ppu
+};
 
 const OFFSET_CARTRIDGE_TYPE: usize = 0x0147;
 const OFFSET_ROM_SIZE: usize = 0x0148;
@@ -31,24 +33,27 @@ pub enum BankingMode {
 }
 
 pub struct Bus {
+    pub  ppu: Ppu,
+    pub  apu: Apu,
+    pub  io_registers: IoRegisters,
     program: Vec<u8>,
-    pub rom_current_bank: u8,
-    pub rom_banks: Vec<[u8; 0x4000]>,
-    pub banking_mode: BankingMode,
-    pub cartridge_ram_size_type: u8,
-    pub ram_enable: bool,
-    pub ram_current_bank: u8,
-    pub ram_banks: Vec<[u8; 0x2000]>,
-    pub wram: [u8; 0x2000],
-    pub hram: [u8; 0x7f],
-    pub ppu: Ppu,
-    pub apu: Apu,
-    pub io_registers: IoRegisters,
+    rom_current_bank: u8,
+    rom_banks: Vec<[u8; 0x4000]>,
+    banking_mode: BankingMode,
+    cartridge_ram_size_type: u8,
+    ram_enable: bool,
+    ram_current_bank: u8,
+    ram_banks: Vec<[u8; 0x2000]>,
+    wram: [u8; 0x2000],
+    hram: [u8; 0x7f],
 }
 
 impl Bus {
     pub fn new() -> Self {
         Bus {
+            ppu: Ppu::new(),
+            apu: Apu::new(),
+            io_registers: IoRegisters::new(),
             program: Vec::new(),
             rom_current_bank: 1,
             rom_banks: Vec::with_capacity(0),
@@ -59,9 +64,6 @@ impl Bus {
             ram_banks: Vec::with_capacity(0),
             wram: [0; 0x2000],
             hram: [0; 0x7f],
-            ppu: Ppu::new(),
-            apu: Apu::new(),
-            io_registers: IoRegisters::new(),
         }
     }
 
