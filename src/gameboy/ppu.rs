@@ -1,5 +1,6 @@
 ﻿use std::cmp::Ordering;
 use bitflags::Flags;
+use crate::gameboy::{SCREEN_HEIGHT, SCREEN_WIDTH};
 
 use super::{
     io_registers::{InterruptFlags, IoRegisters, LCDControl},
@@ -77,7 +78,7 @@ pub struct Ppu {
     pub dot_counter: usize,
     pub vram: Vram,
     sprites: Vec<Oam>,
-    pub screen: [u8; 160 * 144],
+    pub screen: [u8; SCREEN_WIDTH * SCREEN_HEIGHT],
     screen_x: u8,
     skipped_pixels: u8,
     pixel_fetcher: PixelFetcher,
@@ -89,7 +90,7 @@ impl Ppu {
             dot_counter: 0,
             vram: Vram::new(),
             sprites: Vec::with_capacity(10),
-            screen: [0; 160 * 144],
+            screen: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
             screen_x: 0,
             skipped_pixels: 0,
             pixel_fetcher: PixelFetcher::new(),
@@ -142,7 +143,7 @@ impl Ppu {
 
         let bg_enable = registers.lcdc.contains(LCDControl::BG_WINDOW_ENABLE);
         let sprites_enable = registers.lcdc.contains(LCDControl::OBJ_ENABLE);
-        let window_enable = registers.lcdc.contains(LCDControl::WINDOW_ENABLE) && registers.wx < 167 && registers.wy < 144;
+        let window_enable = registers.lcdc.contains(LCDControl::WINDOW_ENABLE) && registers.wx < 167 && registers.wy < SCREEN_HEIGHT as u8;
 
         let is_window_scanline = window_enable && registers.ly >= registers.wy;
         let mut is_window = false;
@@ -160,7 +161,7 @@ impl Ppu {
                         Self::set_lyc_interrupt(registers);
                     }
 
-                    if registers.ly == 144 {
+                    if registers.ly == SCREEN_HEIGHT as u8 {
                         mode = VBlank;
 
                         if lcd_enable {
@@ -171,7 +172,7 @@ impl Ppu {
                                 registers.interrupt_flag.insert(InterruptFlags::LCD_STAT);
                             }
                         }
-                    } else if registers.ly < 144 {
+                    } else if registers.ly < SCREEN_HEIGHT as u8 {
                         mode = OamLookup;
 
                         self.skipped_pixels = 0;
@@ -293,12 +294,12 @@ impl Ppu {
                     _ => pixel = 0,
                 }
 
-                if self.screen_x < 160 && registers.ly < 144 {
+                if self.screen_x < SCREEN_WIDTH as u8 && registers.ly < SCREEN_HEIGHT as u8 {
                     let color = (palette >> (pixel * 2)) & 0b0000_0011;
 
-                    self.screen[registers.ly as usize * 160 + self.screen_x as usize] = color;
+                    self.screen[registers.ly as usize * SCREEN_WIDTH + self.screen_x as usize] = color;
 
-                    self.screen_x = (self.screen_x + 1) % 160;
+                    self.screen_x = (self.screen_x + 1) % SCREEN_WIDTH as u8;
 
                     if self.screen_x == 0 {
                         mode = HBlank;

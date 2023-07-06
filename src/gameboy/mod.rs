@@ -10,6 +10,9 @@ mod cpu_registers;
 mod apu;
 mod pixel_fetcher;
 
+pub(crate) const SCREEN_WIDTH: usize = 160;
+pub(crate) const SCREEN_HEIGHT: usize = 144;
+
 const MCYCLE_DURATION: Duration = Duration::from_nanos((1e9 / 1.048576e6) as u64);
 
 pub(crate) trait Mem {
@@ -83,7 +86,7 @@ impl GameBoy {
         }
     }
 
-    pub fn screen(&self) -> &[u8; 160 * 144] {
+    pub fn screen(&self) -> &[u8; SCREEN_WIDTH * SCREEN_HEIGHT] {
         return &self.bus.ppu.screen;
     }
 

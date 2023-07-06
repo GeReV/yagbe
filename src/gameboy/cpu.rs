@@ -1,7 +1,7 @@
 ﻿use std::time::Duration;
 use bitflags::Flags;
 use crate::gameboy::bus::Bus;
-use crate::gameboy::Mem;
+use crate::gameboy::{Mem, SCREEN_WIDTH};
 use super::{
     cpu_registers::{CpuFlags, CpuRegisters},
     io_registers::InterruptFlags
@@ -60,7 +60,7 @@ impl Cpu {
             let src_base_addr = (bus.io_registers.dma as u16) << 8;
 
             for _ in 0..4 {
-                let byte_index: u16 = 160 - bus.io_registers.dma_counter as u16;
+                let byte_index: u16 = SCREEN_WIDTH as u16 - bus.io_registers.dma_counter as u16;
 
                 let v = bus.mem_read(src_base_addr + byte_index);
                 bus.mem_write(0xfe00 + byte_index, v);

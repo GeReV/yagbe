@@ -100,7 +100,7 @@ fn run() -> Result<(), String> {
     let texture_creator = canvas.texture_creator();
 
     let mut screen = texture_creator
-        .create_texture_streaming(PixelFormatEnum::RGB24, 160, 144)
+        .create_texture_streaming(PixelFormatEnum::RGB24, gameboy::SCREEN_WIDTH as u32, gameboy::SCREEN_HEIGHT as u32)
         .map_err(|e| e.to_string())?;
 
     let mut frame_start = Instant::now();
@@ -170,8 +170,8 @@ fn run() -> Result<(), String> {
                 {
                     screen.with_lock(None, |buffer: &mut [u8], pitch: usize| {
                         for (index, &color) in gameboy.screen().iter().enumerate() {
-                            let x = index % 160;
-                            let y = index / 160;
+                            let x = index % gameboy::SCREEN_WIDTH;
+                            let y = index / gameboy::SCREEN_WIDTH;
 
                             let color = COLORS[color as usize];
 
@@ -183,7 +183,7 @@ fn run() -> Result<(), String> {
                     }).unwrap();
 
                     // Draw screen
-                    canvas.copy(&screen, None, Some(Rect::new(0, 0, 160 * 2, 144 * 2))).unwrap();
+                    canvas.copy(&screen, None, Some(Rect::new(0, 0, (gameboy::SCREEN_WIDTH * 2) as u32, (gameboy::SCREEN_HEIGHT * 2) as u32))).unwrap();
 
                     if show_fps {
                         render_text(&font, &mut canvas, &texture_creator, format!("{:.2}", 1.0 / frame_delta.as_secs_f32()).as_str(), Point::new(4, 4)).unwrap();
