@@ -59,13 +59,13 @@ impl GameBoy {
             return false;
         }
 
-        self.accumulator += time_budget;
+        // self.accumulator += time_budget;
 
         loop {
             let m_cycles = self.cpu.tick(&mut self.bus);
             let t_cycles = m_cycles.t_cycles();
 
-            self.accumulator = self.accumulator.saturating_sub(MCYCLE_DURATION * m_cycles.into());
+            // self.accumulator = self.accumulator.saturating_sub(MCYCLE_DURATION * m_cycles.into());
 
             for _ in 0..t_cycles {
                 if self.bus.ppu.tick(&mut self.bus.io_registers) {
@@ -77,9 +77,9 @@ impl GameBoy {
                 self.bus.apu.tick(&self.bus.io_registers);
             }
 
-            if self.accumulator.is_zero() {
-                return false;
-            }
+            // if self.accumulator.is_zero() {
+            //     return false;
+            // }
         }
     }
 

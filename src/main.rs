@@ -23,6 +23,7 @@ use tao::{
     platform::windows::WindowExtWindows,
     window::WindowBuilder,
 };
+use tao::menu::MenuId;
 use crate::{
     gameboy::{Buttons, GameBoy},
     menu::MENU_OPEN,
@@ -102,18 +103,17 @@ fn run() -> Result<(), String> {
         .create_texture_streaming(PixelFormatEnum::RGB24, 160, 144)
         .map_err(|e| e.to_string())?;
 
-    let mut now = Instant::now();
-    let mut previous_now = now;
+    let mut frame_start = Instant::now();
     let mut sleep_overhead = Duration::ZERO;
 
     let mut frame_delta = Duration::from_millis(16);
 
     let mut show_fps = false;
 
+    let mut time_budget = FRAME_DURATION;
+    
     event_loop.run_return(|event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
-
-        let mut time_budget = FRAME_DURATION;
         
         match event {
             Event::WindowEvent {
@@ -150,71 +150,82 @@ fn run() -> Result<(), String> {
                     KeyCode::ControlLeft => gameboy.button_released(Buttons::B),
                     _ => {}
                 },
-            Event::MenuEvent { menu_id, .. } => match menu_id {
-                MENU_OPEN => {
-                    open_rom(&mut gameboy).unwrap();
-                }
-                _ => {}
-            }
+            Event::MenuEvent { menu_id, .. } => handle_menu_event(&mut gameboy, menu_id),
             Event::MainEventsCleared => {
-                previous_now = now;
-                now = Instant::now();
+                frame_start = Instant::now();
+                
+                time_budget = FRAME_DURATION;
                 
                 if gameboy.run_to_frame(time_budget) {
                     window.request_redraw();
                 }
-
+            }
+            Event::RedrawRequested(_) => {
                 let samples = gameboy.extract_audio_buffer();
                 if samples.len() > 0 {
                     device.queue_audio(samples.as_slice()).unwrap();
                 }
-            }
-            Event::RedrawRequested(_) => {
-                screen.with_lock(None, |buffer: &mut [u8], pitch: usize| {
-                    for (index, &color) in gameboy.screen().iter().enumerate() {
-                        let x = index % 160;
-                        let y = index / 160;
-
-                        let color = COLORS[color as usize];
-
-                        let offset = y * pitch + x * 3;
-                        buffer[offset] = color.r;
-                        buffer[offset + 1] = color.g;
-                        buffer[offset + 2] = color.b;
-                    }
-                }).unwrap();
-
+                
                 // Draw screen
-                canvas.copy(&screen, None, Some(Rect::new(0, 0, 160 * 2, 144 * 2))).unwrap();
+                {
+                    screen.with_lock(None, |buffer: &mut [u8], pitch: usize| {
+                        for (index, &color) in gameboy.screen().iter().enumerate() {
+                            let x = index % 160;
+                            let y = index / 160;
 
-                if show_fps {
-                    render_text(&font, &mut canvas, &texture_creator, format!("{:.2}", 1.0 / frame_delta.as_secs_f32()).as_str(), Point::new(4, 4)).unwrap();
+                            let color = COLORS[color as usize];
+
+                            let offset = y * pitch + x * 3;
+                            buffer[offset] = color.r;
+                            buffer[offset + 1] = color.g;
+                            buffer[offset + 2] = color.b;
+                        }
+                    }).unwrap();
+
+                    // Draw screen
+                    canvas.copy(&screen, None, Some(Rect::new(0, 0, 160 * 2, 144 * 2))).unwrap();
+
+                    if show_fps {
+                        render_text(&font, &mut canvas, &texture_creator, format!("{:.2}", 1.0 / frame_delta.as_secs_f32()).as_str(), Point::new(4, 4)).unwrap();
+                    }
+
+                    canvas.present();
                 }
 
-                canvas.present();
+                // Frame delay
+                {
+                    time_budget = time_budget.saturating_sub(frame_start.elapsed());
 
-                time_budget = time_budget.saturating_sub(previous_now.elapsed());
+                    // Take off the delta to compensate for a previous long frame.
+                    time_budget = time_budget.saturating_sub(sleep_overhead);
 
-                // Take off the delta to compensate for a previous long frame.
-                time_budget = time_budget.saturating_sub(sleep_overhead);
+                    if !time_budget.is_zero() {
+                        let before_sleep = Instant::now();
 
-                if !time_budget.is_zero() {
-                    let before_sleep = Instant::now();
+                        std::thread::sleep(time_budget);
 
-                    std::thread::sleep(time_budget);
-
-                    sleep_overhead = before_sleep.elapsed() - time_budget;
-                } else {
-                    // Slower than real time. Skip frames?
+                        sleep_overhead = before_sleep.elapsed() - time_budget;
+                    } else {
+                        // Slower than real time. Skip frames?
+                    }
                 }
 
-                frame_delta = now - previous_now;
+                frame_delta = frame_start.elapsed();
             }
             _ => {}
         };
     });
 
     Ok(())
+}
+
+fn handle_menu_event(mut gameboy: &mut GameBoy, menu_id: MenuId) {
+    match menu_id {
+        MENU_OPEN => {
+            open_rom(&mut gameboy).unwrap();
+        }
+        _ => {}
+    }
 }
 
 fn menu_height() -> i32 {
