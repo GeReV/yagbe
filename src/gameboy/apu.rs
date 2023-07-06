@@ -209,7 +209,6 @@ impl Apu {
     pub fn tick(&mut self, registers: &IoRegisters) {
         // TODO: if NR52.7 is off, all registers except NR52 and NRx1 are read-only. There is a different case for GBC.
 
-        // TODO: Could this miss iterations of `registers.div`? Can DIV increment more than 32? 
         if self.div_prev & (1 << 4) != 0 && registers.div & (1 << 4) == 0 {
             self.div_apu = self.div_apu.wrapping_add(1);
 
@@ -553,7 +552,8 @@ impl Mem for Apu {
             0xff14 => {
                 self.nr14 = value;
 
-                if value & (1 << 7) != 0 {
+                let ch1_dac_enable = self.nr12 & 0xf8 != 0;
+                if value & (1 << 7) != 0 && ch1_dac_enable {
                     self.ch1_length_timer = self.nr11 & 0b0011_1111;
                     self.ch1_freq_sweep_pace = (self.nr10 & 0b0111_0000) >> 4;
                     self.ch1_freq_sweep_addition = self.nr10 & 0b0000_1000 == 0;
@@ -577,7 +577,8 @@ impl Mem for Apu {
             0xff19 => {
                 self.nr24 = value;
 
-                if value & (1 << 7) != 0 {
+                let ch2_dac_enable = self.nr22 & 0xf8 != 0;
+                if value & (1 << 7) != 0 && ch2_dac_enable {
                     self.ch2_length_timer = self.nr21 & 0b0011_1111;
                     self.ch2_envelope_sweep_direction_increase = if self.nr22 & 0b0000_1000 == 0 { -1 } else { 1 };
                     self.ch2_envelope_sweep_pace = self.nr22 & 0b0000_0011;
@@ -595,7 +596,8 @@ impl Mem for Apu {
             0xff1e => {
                 self.nr34 = value;
 
-                if value & (1 << 7) != 0 {
+                let ch3_dac_enable = self.nr30 & (1 << 7) != 0;
+                if value & (1 << 7) != 0 && ch3_dac_enable {
                     self.ch3_length_timer = self.nr31;
                     self.ch3_period_counter = 0;
                     self.ch3_sample_counter = 0;
@@ -612,7 +614,8 @@ impl Mem for Apu {
             0xff23 => {
                 self.nr44 = value;
 
-                if value & (1 << 7) != 0 {
+                let ch4_dac_enable = self.nr42 & 0xf8 != 0;
+                if value & (1 << 7) != 0 && ch4_dac_enable {
                     self.ch4_length_timer = self.nr41 & 0b0011_1111;
                     self.ch4_envelope_sweep_direction_increase = if self.nr42 & 0b0000_1000 == 0 { -1 } else { 1 };
                     self.ch4_envelope_sweep_pace = self.nr42 & 0b0000_0011;

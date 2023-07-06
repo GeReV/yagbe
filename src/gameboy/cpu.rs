@@ -49,6 +49,10 @@ impl Cpu {
             halted: false,
         }
     }
+    
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
 
     pub fn tick(&mut self, bus: &mut Bus) -> MCycles {
         // Handle DMA copy sequence.

@@ -47,6 +47,8 @@ impl GameBoy {
     }
 
     pub fn load(&mut self, program: Vec<u8>) {
+        self.accumulator = Duration::ZERO;
+        self.cpu.reset();
         self.bus.load(program);
 
         self.loaded = true;

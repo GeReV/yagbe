@@ -103,6 +103,7 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let mut now = Instant::now();
+    let mut previous_now = now;
     let mut sleep_overhead = Duration::ZERO;
 
     let mut frame_delta = Duration::from_millis(16);
@@ -113,9 +114,7 @@ fn run() -> Result<(), String> {
         *control_flow = ControlFlow::Poll;
 
         let mut time_budget = FRAME_DURATION;
-
-        let previous_now = now;
-
+        
         match event {
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -158,7 +157,9 @@ fn run() -> Result<(), String> {
                 _ => {}
             }
             Event::MainEventsCleared => {
-                // Application update code.
+                previous_now = now;
+                now = Instant::now();
+                
                 if gameboy.run_to_frame(time_budget) {
                     window.request_redraw();
                 }
@@ -211,8 +212,6 @@ fn run() -> Result<(), String> {
             }
             _ => {}
         };
-
-        now = Instant::now();
     });
 
     Ok(())

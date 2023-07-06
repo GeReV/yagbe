@@ -1,10 +1,11 @@
-﻿use super::{
+﻿use tao::keyboard::Key::Fn;
+use super::{
     apu::Apu,
     bus::BankingMode::{AdvancedRomOrRamBanking, Simple},
     cpu::Cpu,
     io_registers::IoRegisters,
     Mem,
-    ppu::Ppu
+    ppu::Ppu,
 };
 
 const OFFSET_CARTRIDGE_TYPE: usize = 0x0147;
@@ -33,9 +34,9 @@ pub enum BankingMode {
 }
 
 pub struct Bus {
-    pub  ppu: Ppu,
-    pub  apu: Apu,
-    pub  io_registers: IoRegisters,
+    pub ppu: Ppu,
+    pub apu: Apu,
+    pub io_registers: IoRegisters,
     program: Vec<u8>,
     rom_current_bank: u8,
     rom_banks: Vec<[u8; 0x4000]>,
@@ -65,6 +66,11 @@ impl Bus {
             wram: [0; 0x2000],
             hram: [0; 0x7f],
         }
+        
+    }
+    
+    pub fn reset(&mut self) {
+        *self = Self::new();
     }
 
     pub fn load(&mut self, program: Vec<u8>) {
@@ -76,6 +82,8 @@ impl Bus {
         let rom_size_bytes: usize = 32 * 1024 * (1 << rom_size_type);
 
         let bank_count = rom_size_bytes / 0x4000;
+        
+        self.reset();
 
         self.rom_current_bank = 1;
         self.rom_banks = Vec::with_capacity(bank_count);
