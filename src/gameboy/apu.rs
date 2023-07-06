@@ -309,9 +309,9 @@ impl Apu {
                     0
                 };
 
-                sample_to_volume(sample)
+                sample
             } else {
-                0.0
+                0
             };
 
             // Channel 2
@@ -332,9 +332,9 @@ impl Apu {
                     0
                 };
 
-                sample_to_volume(sample)
+                sample
             } else {
-                0.0
+                0
             };
 
             // Channel 3
@@ -355,29 +355,29 @@ impl Apu {
                     _ => unreachable!()
                 };
 
-                sample_to_volume(output_level)
+                output_level
             } else {
-                0.0
+                0
             };
 
             // Channel 4
             let ch4_dac_enabled = self.nr42 & 0xf8 != 0;
             let ch4_sample = if ch4_dac_enabled && self.nr52.contains(SoundEnable::CH4_ENABLE) && (self.ch4_lsfr & 1) != 0 {
-                sample_to_volume(self.ch4_volume)
+                self.ch4_volume
             } else {
-                0.0
+                0
             };
 
             let sample_left =
-                ch1_sample * self.nr51.contains(SoundPanning::CH1_LEFT) as u8 as f32 +
-                    ch2_sample * self.nr51.contains(SoundPanning::CH2_LEFT) as u8 as f32 +
-                    ch3_sample * self.nr51.contains(SoundPanning::CH3_LEFT) as u8 as f32 +
-                    ch4_sample * self.nr51.contains(SoundPanning::CH4_LEFT) as u8 as f32;
+                sample_to_volume(ch1_sample) * self.nr51.contains(SoundPanning::CH1_LEFT) as u8 as f32 +
+                    sample_to_volume(ch2_sample) * self.nr51.contains(SoundPanning::CH2_LEFT) as u8 as f32 +
+                    sample_to_volume(ch3_sample) * self.nr51.contains(SoundPanning::CH3_LEFT) as u8 as f32 +
+                    sample_to_volume(ch4_sample) * self.nr51.contains(SoundPanning::CH4_LEFT) as u8 as f32;
             let sample_right =
-                ch1_sample * self.nr51.contains(SoundPanning::CH1_RIGHT) as u8 as f32 +
-                    ch2_sample * self.nr51.contains(SoundPanning::CH2_RIGHT) as u8 as f32 +
-                    ch3_sample * self.nr51.contains(SoundPanning::CH3_RIGHT) as u8 as f32 +
-                    ch4_sample * self.nr51.contains(SoundPanning::CH4_RIGHT) as u8 as f32;
+                sample_to_volume(ch1_sample) * self.nr51.contains(SoundPanning::CH1_RIGHT) as u8 as f32 +
+                    sample_to_volume(ch2_sample) * self.nr51.contains(SoundPanning::CH2_RIGHT) as u8 as f32 +
+                    sample_to_volume(ch3_sample) * self.nr51.contains(SoundPanning::CH3_RIGHT) as u8 as f32 +
+                    sample_to_volume(ch4_sample) * self.nr51.contains(SoundPanning::CH4_RIGHT) as u8 as f32;
 
             let volume_left = (1 + ((self.nr50 >> 4) & 7)) as f32 * 0.125;
             let volume_right = (1 + ((self.nr50 >> 0) & 7)) as f32 * 0.125;
