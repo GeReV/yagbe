@@ -103,18 +103,18 @@ fn run() -> Result<(), String> {
         .create_texture_streaming(PixelFormatEnum::RGB24, gameboy::SCREEN_WIDTH as u32, gameboy::SCREEN_HEIGHT as u32)
         .map_err(|e| e.to_string())?;
 
-    let mut frame_start = Instant::now();
-    let mut sleep_overhead = Duration::ZERO;
-
-    let mut frame_delta = Duration::from_millis(16);
-
     let mut show_fps = false;
 
     let mut time_budget = FRAME_DURATION;
-    
+
+    let mut frame_start = Instant::now();
+    let mut frame_delta = FRAME_DURATION;
+
+    let mut sleep_overhead = Duration::ZERO;
+
     event_loop.run_return(|event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
-        
+
         match event {
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -153,9 +153,9 @@ fn run() -> Result<(), String> {
             Event::MenuEvent { menu_id, .. } => handle_menu_event(&mut gameboy, menu_id),
             Event::MainEventsCleared => {
                 frame_start = Instant::now();
-                
+
                 time_budget = FRAME_DURATION;
-                
+
                 if gameboy.run_to_frame(time_budget) {
                     window.request_redraw();
                 }
@@ -165,7 +165,7 @@ fn run() -> Result<(), String> {
                 if samples.len() > 0 {
                     device.queue_audio(samples.as_slice()).unwrap();
                 }
-                
+
                 // Draw screen
                 {
                     screen.with_lock(None, |buffer: &mut [u8], pitch: usize| {
