@@ -13,7 +13,8 @@ I did resort to reading examples, however, on a few non-GB specific things, like
 Emulators with built-in debuggers were also used as reference.
 
 The project makes use of very few external dependencies. The only used crates are the [Rust SDL2 bindings](https://github.com/Rust-SDL2/rust-sdl2) 
-and the [bitflags crate](https://docs.rs/bitflags/latest/bitflags/) for convenience.
+and the [bitflags crate](https://docs.rs/bitflags/latest/bitflags/) for convenience.  
+Late in the project, the crates [Tao](https://github.com/tauri-apps/tao) and [Rust for Windows](https://github.com/microsoft/windows-rs) were added. See notes.
 
 This emulator is far from fully featured and ignores, by design, some features and systems present in the Game Boy console
 and other emulator.
@@ -104,6 +105,27 @@ by [@bugzmanov](https://github.com/bugzmanov/), to get a general idea of how an 
    a bug in the Interrupt Service Routine that allowed additional interrupts to run while one is already being handled.  
    With those issues fixed, there still remains a small visual glitch during rendering, which is to be expected 
    in actual devices, but made slightly worse in the emulator due to another small bug which I will fix later.
+8. After deciding I want to have some more basic functionality for the emulator, 
+   I added [Tao](https://github.com/tauri-apps/tao) and the [Rust for Windows](https://github.com/microsoft/windows-rs) 
+   crate for window management and using some bits from the Windows API, like opening a file selection dialog.
+   
+   During this effort I rewrote bits of the main executable file (`main.rs`), to use the new crates and improve the game
+   loop which runs the emulator, to keep it running at a pace closer to hardware timings.
+   
+   After doing so, the only remaining major issue that bothered me, was sound synchronization. Since the emulator's run 
+   was dictated by its window's event loop, this caused its audio to suffer from [clock drift](https://en.wikipedia.org/wiki/Clock_drift),
+   which is a well known problem.
+9. Finally, I decided to pick the method used by many emulators, which is to sync the emulator to the computer's audio
+   system.
+   
+   Doing this was both surprisingly easy and surprisingly effective.
+   
+   Using a callback received from SDL's audio system to clock the emulator until it could fill a sample buffer 
+   of an arbitrary size (chosen by trial-and-error), resulted in perfectly synced audio with few-to-no stutters,
+   _and_ kept the emulator running at correct pace regardless of the buffer's size, again to my surprise.
+   
+   At this point, there is still an issue of possible image tearing when drawing, but I consider it small enough to not
+   warrant fixing right now.
 
 ## Future plans
 
