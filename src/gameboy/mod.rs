@@ -7,7 +7,7 @@ mod bus;
 mod ppu;
 mod io_registers;
 mod cpu_registers;
-mod apu;
+pub(crate) mod apu;
 mod pixel_fetcher;
 
 pub(crate) const SCREEN_WIDTH: usize = 160;
@@ -90,6 +90,9 @@ impl GameBoy {
         return &self.bus.ppu.screen;
     }
 
+    pub fn audio_buffer_size(&self) -> usize {
+        return self.bus.apu.buffer.len();
+    }
     pub fn extract_audio_buffer(&mut self) -> Vec<f32> {
         return self.bus.apu.extract_audio_buffer();
     }

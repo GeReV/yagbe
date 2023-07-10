@@ -6,6 +6,9 @@ use super::{
 
 const APU_FREQUENCY: usize = 1024 * 1024; // Hz
 
+pub(crate) const AUDIO_SAMPLE_RATE: usize = 48_000;
+pub(crate) const AUDIO_BUFFER_SIZE: usize = 512;
+
 bitflags! {
     /// Sound panning
     /// Bit 7 - Mix channel 4 into left output
@@ -147,10 +150,10 @@ pub struct Apu {
 impl Apu {
     pub fn new() -> Self {
         Self {
-            accumulator: 0f32,
-            buffer: Vec::<f32>::with_capacity(32_000),
+            accumulator: 0.0,
+            buffer: Vec::<f32>::with_capacity(AUDIO_BUFFER_SIZE),
             master_volume: 0.25,
-            sample_rate: 48_000,
+            sample_rate: AUDIO_SAMPLE_RATE,
             div_prev: 0,
             div_apu: 0,
             nr10: 0x80,
@@ -384,10 +387,10 @@ impl Apu {
 
             self.buffer.push(sample_left * volume_left * 0.25 * self.master_volume);
             self.buffer.push(sample_right * volume_right * 0.25 * self.master_volume);
-
+            
             self.accumulator -= step;
         }
-
+        
         self.accumulator += 1.0;
 
         self.div_prev = registers.div;
@@ -507,7 +510,7 @@ impl Apu {
     }
 
     pub fn extract_audio_buffer(&mut self) -> Vec<f32> {
-        return std::mem::replace(&mut self.buffer, Vec::with_capacity(32_000));
+        return std::mem::replace(&mut self.buffer, Vec::with_capacity(AUDIO_BUFFER_SIZE));
     }
 }
 

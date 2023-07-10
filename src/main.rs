@@ -11,6 +11,7 @@ use std::{
     ptr::addr_of_mut,
     time::{Duration, Instant},
 };
+use std::fmt::format;
 
 use sdl2::{audio::AudioSpecDesired, messagebox::MessageBoxFlag, pixels::{Color, PixelFormatEnum}, rect::{Point, Rect}, render::{TextureCreator, TextureQuery, WindowCanvas}, ttf::Font, video::Window, video::WindowContext, VideoSubsystem};
 use tao::{
@@ -88,14 +89,14 @@ fn run() -> Result<(), String> {
     let font = ttf_context.load_font("JetBrainsMono-Regular.ttf", 9)?;
 
     let desired_spec = AudioSpecDesired {
-        freq: Some(48_000),
+        freq: Some(gameboy::apu::AUDIO_SAMPLE_RATE as i32),
         channels: Some(2),
-        samples: None, // default sample size
+        samples: Some(gameboy::apu::AUDIO_BUFFER_SIZE as u16 / 2), // default sample size
     };
 
     let device = audio_subsystem.open_queue::<f32, _>(None, &desired_spec)?;
     device.resume();
-
+    
     let mut canvas = sdl_window.into_canvas().build().map_err(|e| e.to_string())?;
     let texture_creator = canvas.texture_creator();
 
@@ -113,16 +114,20 @@ fn run() -> Result<(), String> {
     let mut sleep_overhead = Duration::ZERO;
 
     event_loop.run_return(|event, _, control_flow| {
+        let iteration_time = Instant::now();
+        
         *control_flow = ControlFlow::Poll;
 
-        match event {
+        let new_frame = match event {
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
                 *control_flow = ControlFlow::Exit;
+                
+                false
             }
-            Event::DeviceEvent { event: DeviceEvent::Key(RawKeyEvent { physical_key, state: ElementState::Pressed }), .. } =>
+            Event::DeviceEvent { event: DeviceEvent::Key(RawKeyEvent { physical_key, state: ElementState::Pressed }), .. } => {
                 match physical_key {
                     KeyCode::F2 => show_fps = !show_fps,
 
@@ -136,8 +141,11 @@ fn run() -> Result<(), String> {
                     KeyCode::AltLeft => gameboy.button_pressed(Buttons::A),
                     KeyCode::ControlLeft => gameboy.button_pressed(Buttons::B),
                     _ => {}
-                },
-            Event::DeviceEvent { event: DeviceEvent::Key(RawKeyEvent { physical_key, state: ElementState::Released }), .. } =>
+                }
+
+                false
+            }
+            Event::DeviceEvent { event: DeviceEvent::Key(RawKeyEvent { physical_key, state: ElementState::Released }), .. } => {
                 match physical_key {
                     KeyCode::ArrowDown => gameboy.button_released(Buttons::Down),
                     KeyCode::ArrowUp => gameboy.button_released(Buttons::Up),
@@ -149,23 +157,23 @@ fn run() -> Result<(), String> {
                     KeyCode::AltLeft => gameboy.button_released(Buttons::A),
                     KeyCode::ControlLeft => gameboy.button_released(Buttons::B),
                     _ => {}
-                },
-            Event::MenuEvent { menu_id, .. } => handle_menu_event(&mut gameboy, menu_id),
+                }
+
+                false
+            }
+            Event::MenuEvent { menu_id, .. } => {
+                handle_menu_event(&mut gameboy, menu_id);
+
+                false
+            }
             Event::MainEventsCleared => {
-                frame_start = Instant::now();
-
-                time_budget = FRAME_DURATION;
-
                 if gameboy.run_to_frame(time_budget) {
                     window.request_redraw();
                 }
+
+                false
             }
             Event::RedrawRequested(_) => {
-                let samples = gameboy.extract_audio_buffer();
-                if samples.len() > 0 {
-                    device.queue_audio(samples.as_slice()).unwrap();
-                }
-
                 // Draw screen
                 {
                     screen.with_lock(None, |buffer: &mut [u8], pitch: usize| {
@@ -184,12 +192,19 @@ fn run() -> Result<(), String> {
 
                     // Draw screen
                     canvas.copy(&screen, None, Some(Rect::new(0, 0, (gameboy::SCREEN_WIDTH * 2) as u32, (gameboy::SCREEN_HEIGHT * 2) as u32))).unwrap();
-
+                    
                     if show_fps {
                         render_text(&font, &mut canvas, &texture_creator, format!("{:.2}", 1.0 / frame_delta.as_secs_f32()).as_str(), Point::new(4, 4)).unwrap();
                     }
 
                     canvas.present();
+                }
+                
+                if gameboy.audio_buffer_size() >= gameboy::apu::AUDIO_BUFFER_SIZE {
+                    let samples = gameboy.extract_audio_buffer();
+
+                    // device.clear();
+                    device.queue_audio(samples.as_slice()).unwrap();
                 }
 
                 // Frame delay
@@ -211,9 +226,18 @@ fn run() -> Result<(), String> {
                 }
 
                 frame_delta = frame_start.elapsed();
+
+                frame_start = Instant::now();
+                time_budget = FRAME_DURATION;
+                
+                true
             }
-            _ => {}
+            _ => false
         };
+
+        if !new_frame {
+            time_budget = time_budget.saturating_sub(iteration_time.elapsed());
+        }
     });
 
     Ok(())
