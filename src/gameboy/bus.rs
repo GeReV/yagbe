@@ -66,9 +66,8 @@ impl Bus {
             wram: [0; 0x2000],
             hram: [0; 0x7f],
         }
-        
     }
-    
+
     pub fn reset(&mut self) {
         *self = Self::new();
     }
@@ -82,7 +81,7 @@ impl Bus {
         let rom_size_bytes: usize = 32 * 1024 * (1 << rom_size_type);
 
         let bank_count = rom_size_bytes / 0x4000;
-        
+
         self.reset();
 
         self.rom_current_bank = 1;
@@ -97,7 +96,7 @@ impl Bus {
         self.cartridge_ram_size_type = program[OFFSET_RAM_SIZE];
 
         let cartridge_ram_bytes_total = cartridge_ram_size_kib(self.cartridge_ram_size_type) * 1024;
-        
+
         self.ram_banks = Vec::with_capacity(cartridge_ram_bytes_total / 0x2000);
         while self.ram_banks.len() < self.ram_banks.capacity() {
             self.ram_banks.push([0; 0x2000]);
@@ -192,6 +191,7 @@ impl Mem for Bus {
                     if self.cartridge_ram_size_type == 3 {
                         self.ram_current_bank = value;
                     } else if false /* 1MiB ROM or larger */ {
+                        todo!();
                         // Use value for bits 4-5 of ROM bank number.
                     }
                 }
