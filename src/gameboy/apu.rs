@@ -7,7 +7,10 @@ use super::{
 const APU_FREQUENCY: usize = 1024 * 1024; // Hz
 
 pub(crate) const AUDIO_SAMPLE_RATE: usize = 48_000;
-pub(crate) const AUDIO_BUFFER_SIZE: usize = 512;
+
+// NOTE: This value is actually more-or-less arbitrary. It just worked. Using half of it caused audio popping, using double caused frames to take too long.
+//  Using a value calculated based on expected frame rate resulted in roughly the same results.
+pub(crate) const AUDIO_BUFFER_SIZE: usize = 1024 * 2;
 
 bitflags! {
     /// Sound panning
@@ -387,10 +390,10 @@ impl Apu {
 
             self.buffer.push(sample_left * volume_left * 0.25 * self.master_volume);
             self.buffer.push(sample_right * volume_right * 0.25 * self.master_volume);
-            
+
             self.accumulator -= step;
         }
-        
+
         self.accumulator += 1.0;
 
         self.div_prev = registers.div;

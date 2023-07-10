@@ -10,10 +10,11 @@ use std::{
     fs,
     ptr::addr_of_mut,
     time::{Duration, Instant},
+    sync::{Arc, Mutex},
 };
-use std::fmt::format;
 
 use sdl2::{audio::AudioSpecDesired, messagebox::MessageBoxFlag, pixels::{Color, PixelFormatEnum}, rect::{Point, Rect}, render::{TextureCreator, TextureQuery, WindowCanvas}, ttf::Font, video::Window, video::WindowContext, VideoSubsystem};
+use sdl2::audio::AudioCallback;
 use tao::{
     dpi::PhysicalSize,
     event::{DeviceEvent, Event, WindowEvent},
@@ -47,6 +48,24 @@ const COLORS: [Color; 4] = [
 //     Color::RGB(0x46, 0x87, 0x8f),
 //     Color::RGB(0x33, 0x2c, 0x50),
 // ];
+
+struct Callback {
+    gameboy: Arc<Mutex<GameBoy>>,
+}
+
+impl AudioCallback for Callback {
+    type Channel = f32;
+
+    fn callback(&mut self, buffer: &mut [Self::Channel]) {
+        let mut gameboy = self.gameboy.lock().unwrap();
+
+        while gameboy.audio_buffer_size() < gameboy::apu::AUDIO_BUFFER_SIZE {
+            gameboy.tick();
+        }
+
+        buffer.copy_from_slice(gameboy.extract_audio_buffer().as_slice());
+    }
+}
 
 fn main() -> Result<(), String> {
     if let Err(msg) = run() {
@@ -82,6 +101,8 @@ fn run() -> Result<(), String> {
         gameboy.load(rom);
     }
 
+    let gameboy = Arc::new(Mutex::new(gameboy));
+
     let audio_subsystem = sdl_context.audio()?;
     let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string())?;
 
@@ -94,9 +115,15 @@ fn run() -> Result<(), String> {
         samples: Some(gameboy::apu::AUDIO_BUFFER_SIZE as u16 / 2), // default sample size
     };
 
-    let device = audio_subsystem.open_queue::<f32, _>(None, &desired_spec)?;
+    let audio_device = audio_subsystem.audio_playback_device_name(1)?;
+    let device = audio_subsystem.open_playback(audio_device.as_str(), &desired_spec, |_spec| {
+        Callback {
+            gameboy: gameboy.clone()
+        }
+    })?;
+
     device.resume();
-    
+
     let mut canvas = sdl_window.into_canvas().build().map_err(|e| e.to_string())?;
     let texture_creator = canvas.texture_creator();
 
@@ -106,28 +133,20 @@ fn run() -> Result<(), String> {
 
     let mut show_fps = false;
 
-    let mut time_budget = FRAME_DURATION;
-
     let mut frame_start = Instant::now();
     let mut frame_delta = FRAME_DURATION;
 
-    let mut sleep_overhead = Duration::ZERO;
-
     event_loop.run_return(|event, _, control_flow| {
-        let iteration_time = Instant::now();
-        
         *control_flow = ControlFlow::Poll;
 
-        let new_frame = match event {
+        match event {
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
                 *control_flow = ControlFlow::Exit;
-                
-                false
             }
-            Event::DeviceEvent { event: DeviceEvent::Key(RawKeyEvent { physical_key, state: ElementState::Pressed }), .. } => {
+            Event::DeviceEvent { event: DeviceEvent::Key(RawKeyEvent { physical_key, state: ElementState::Pressed }), .. } => gameboy.lock().map(|mut gameboy| {
                 match physical_key {
                     KeyCode::F2 => show_fps = !show_fps,
 
@@ -142,10 +161,8 @@ fn run() -> Result<(), String> {
                     KeyCode::ControlLeft => gameboy.button_pressed(Buttons::B),
                     _ => {}
                 }
-
-                false
-            }
-            Event::DeviceEvent { event: DeviceEvent::Key(RawKeyEvent { physical_key, state: ElementState::Released }), .. } => {
+            }).unwrap(),
+            Event::DeviceEvent { event: DeviceEvent::Key(RawKeyEvent { physical_key, state: ElementState::Released }), .. } => gameboy.lock().map(|mut gameboy| {
                 match physical_key {
                     KeyCode::ArrowDown => gameboy.button_released(Buttons::Down),
                     KeyCode::ArrowUp => gameboy.button_released(Buttons::Up),
@@ -158,22 +175,17 @@ fn run() -> Result<(), String> {
                     KeyCode::ControlLeft => gameboy.button_released(Buttons::B),
                     _ => {}
                 }
-
-                false
-            }
-            Event::MenuEvent { menu_id, .. } => {
-                handle_menu_event(&mut gameboy, menu_id);
-
-                false
-            }
+            }).unwrap(),
+            Event::MenuEvent { menu_id, .. } => gameboy.lock()
+                .map(|mut gameboy| handle_menu_event(&mut gameboy, menu_id))
+                .unwrap(),
             Event::MainEventsCleared => {
-                if gameboy.run_to_frame(time_budget) {
-                    window.request_redraw();
-                }
-
-                false
+                // TODO: Wait until a screen is ready to draw.
+                window.request_redraw();
             }
-            Event::RedrawRequested(_) => {
+            Event::RedrawRequested(_) => gameboy.lock().map(|gameboy| {
+                frame_start = Instant::now();
+
                 // Draw screen
                 {
                     screen.with_lock(None, |buffer: &mut [u8], pitch: usize| {
@@ -192,52 +204,20 @@ fn run() -> Result<(), String> {
 
                     // Draw screen
                     canvas.copy(&screen, None, Some(Rect::new(0, 0, (gameboy::SCREEN_WIDTH * 2) as u32, (gameboy::SCREEN_HEIGHT * 2) as u32))).unwrap();
-                    
+
                     if show_fps {
                         render_text(&font, &mut canvas, &texture_creator, format!("{:.2}", 1.0 / frame_delta.as_secs_f32()).as_str(), Point::new(4, 4)).unwrap();
                     }
 
                     canvas.present();
                 }
-                
-                if gameboy.audio_buffer_size() >= gameboy::apu::AUDIO_BUFFER_SIZE {
-                    let samples = gameboy.extract_audio_buffer();
-
-                    // device.clear();
-                    device.queue_audio(samples.as_slice()).unwrap();
-                }
-
-                // Frame delay
-                {
-                    time_budget = time_budget.saturating_sub(frame_start.elapsed());
-
-                    // Take off the delta to compensate for a previous long frame.
-                    time_budget = time_budget.saturating_sub(sleep_overhead);
-
-                    if !time_budget.is_zero() {
-                        let before_sleep = Instant::now();
-
-                        std::thread::sleep(time_budget);
-
-                        sleep_overhead = before_sleep.elapsed() - time_budget;
-                    } else {
-                        // Slower than real time. Skip frames?
-                    }
-                }
 
                 frame_delta = frame_start.elapsed();
 
                 frame_start = Instant::now();
-                time_budget = FRAME_DURATION;
-                
-                true
-            }
-            _ => false
+            }).unwrap(),
+            _ => {}
         };
-
-        if !new_frame {
-            time_budget = time_budget.saturating_sub(iteration_time.elapsed());
-        }
     });
 
     Ok(())

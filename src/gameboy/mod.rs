@@ -13,7 +13,8 @@ mod pixel_fetcher;
 pub(crate) const SCREEN_WIDTH: usize = 160;
 pub(crate) const SCREEN_HEIGHT: usize = 144;
 
-const MCYCLE_DURATION: Duration = Duration::from_nanos((1e9 / 1.048576e6) as u64);
+pub(crate) const FRAME_DURATION: Duration = Duration::from_micros(16_742);
+// const MCYCLE_DURATION: Duration = Duration::from_nanos((1e9 / 1.048576e6) as u64);
 
 pub(crate) trait Mem {
     fn mem_read(&self, addr: u16) -> u8;
@@ -57,33 +58,33 @@ impl GameBoy {
         self.loaded = true;
     }
 
-    pub fn run_to_frame(&mut self, time_budget: Duration) -> bool {
+    pub fn run_to_frame(&mut self) {
+        while !self.tick() {
+            // just keep ticking.
+        }
+    }
+    
+    pub fn tick(&mut self) -> bool {
         if !self.loaded {
             return false;
         }
+        
+        let mut result = false;
+        
+        let m_cycles = self.cpu.tick(&mut self.bus);
+        let t_cycles = m_cycles.t_cycles();
 
-        // self.accumulator += time_budget;
-
-        loop {
-            let m_cycles = self.cpu.tick(&mut self.bus);
-            let t_cycles = m_cycles.t_cycles();
-
-            // self.accumulator = self.accumulator.saturating_sub(MCYCLE_DURATION * m_cycles.into());
-
-            for _ in 0..t_cycles {
-                if self.bus.ppu.tick(&mut self.bus.io_registers) {
-                    return true;
-                }
+        for _ in 0..t_cycles {
+            if self.bus.ppu.tick(&mut self.bus.io_registers) {
+                result = true;
             }
-
-            for _ in 0..m_cycles.into() {
-                self.bus.apu.tick(&self.bus.io_registers);
-            }
-
-            // if self.accumulator.is_zero() {
-            //     return false;
-            // }
         }
+
+        for _ in 0..m_cycles.into() {
+            self.bus.apu.tick(&self.bus.io_registers);
+        }
+        
+        result
     }
 
     pub fn screen(&self) -> &[u8; SCREEN_WIDTH * SCREEN_HEIGHT] {
