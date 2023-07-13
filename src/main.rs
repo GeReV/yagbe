@@ -2,10 +2,6 @@ mod dialog;
 mod gameboy;
 mod menu;
 
-extern crate sdl2;
-extern crate raw_window_handle;
-extern crate windows;
-
 use std::{
     fs,
     ptr::addr_of_mut,
@@ -24,8 +20,8 @@ use tao::{
     platform::run_return::EventLoopExtRunReturn,
     platform::windows::WindowExtWindows,
     window::WindowBuilder,
+    menu::MenuId
 };
-use tao::menu::MenuId;
 use crate::{
     gameboy::{Buttons, GameBoy},
     menu::MENU_OPEN,

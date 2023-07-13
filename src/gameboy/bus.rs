@@ -1,8 +1,6 @@
-﻿use tao::keyboard::Key::Fn;
-use super::{
+﻿use super::{
     apu::Apu,
     bus::BankingMode::{AdvancedRomOrRamBanking, Simple},
-    cpu::Cpu,
     io_registers::IoRegisters,
     Mem,
     ppu::Ppu,
@@ -73,9 +71,9 @@ impl Bus {
     }
 
     pub fn load(&mut self, program: Vec<u8>) {
-        let checksum = self.verify_checksum(&program);
+        let _checksum = self.verify_checksum(&program);
 
-        let cartridge_type = program[OFFSET_CARTRIDGE_TYPE];
+        let _cartridge_type = program[OFFSET_CARTRIDGE_TYPE];
 
         let rom_size_type = program[OFFSET_ROM_SIZE];
         let rom_size_bytes: usize = 32 * 1024 * (1 << rom_size_type);

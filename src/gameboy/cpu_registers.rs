@@ -46,24 +46,21 @@ impl CpuRegisters {
         u16::from_be_bytes([self.b, self.c])
     }
     pub fn set_bc(&mut self, value: u16) {
-        self.b = (value >> 8) as u8;
-        self.c = (value & 0xff) as u8;
+        [self.b, self.c] = value.to_be_bytes();
     }
 
     pub fn de(&self) -> u16 {
         u16::from_be_bytes([self.d, self.e])
     }
     pub(crate) fn set_de(&mut self, value: u16) {
-        self.d = (value >> 8) as u8;
-        self.e = (value & 0xff) as u8;
+        [self.d, self.e] = value.to_be_bytes();
     }
 
     pub fn hl(&self) -> u16 {
         u16::from_be_bytes([self.h, self.l])
     }
     pub fn set_hl(&mut self, value: u16) {
-        self.h = (value >> 8) as u8;
-        self.l = (value & 0xff) as u8;
+        [self.h, self.l] = value.to_be_bytes();
     }
 }
 
