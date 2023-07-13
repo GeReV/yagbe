@@ -1,5 +1,4 @@
-﻿use std::time::Duration;
-use bitflags::Flags;
+﻿use bitflags::Flags;
 use crate::gameboy::bus::Bus;
 use crate::gameboy::{Mem, SCREEN_WIDTH};
 use super::{

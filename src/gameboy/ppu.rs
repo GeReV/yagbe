@@ -82,6 +82,7 @@ pub struct Ppu {
     screen_x: u8,
     skipped_pixels: u8,
     pixel_fetcher: PixelFetcher,
+    is_window: bool,
 }
 
 impl Ppu {
@@ -94,6 +95,7 @@ impl Ppu {
             screen_x: 0,
             skipped_pixels: 0,
             pixel_fetcher: PixelFetcher::new(),
+            is_window: false,
         }
     }
 
@@ -146,7 +148,6 @@ impl Ppu {
         let window_enable = registers.lcdc.contains(LCDControl::WINDOW_ENABLE) && registers.wx < 167 && registers.wy < SCREEN_HEIGHT as u8;
 
         let is_window_scanline = window_enable && registers.ly >= registers.wy;
-        let mut is_window = false;
 
         match mode {
             HBlank => {
@@ -219,11 +220,11 @@ impl Ppu {
                 self.pixel_fetcher.tick(&self.vram, &registers);
 
                 if bg_enable {
-                    if !is_window && window_enable && is_window_scanline && self.screen_x + 7 >= registers.wx {
-                        is_window = true;
+                    if !self.is_window && window_enable && is_window_scanline && self.screen_x + 7 >= registers.wx {
+                        self.is_window = true;
 
                         self.fetch_bg_pixels(registers, true);
-
+                        
                         return None;
                     }
 
@@ -303,6 +304,8 @@ impl Ppu {
 
                     if self.screen_x == 0 {
                         mode = HBlank;
+                        
+                        self.is_window = false;
 
                         // TODO: According to mooneye-gb, HBLANK interrupt occurs one cycle before mode switch
                         // https://github.com/wilbertpol/mooneye-gb/blob/b78dd21f0b6d00513bdeab20f7950e897a0379b3/src/hardware/gpu/mod.rs#L391

@@ -1,6 +1,8 @@
 ﻿use std::time::Duration;
-use crate::gameboy::cpu::Cpu;
-use self::bus::Bus;
+use self::{
+    cpu::Cpu,
+    bus::Bus
+};
 
 mod cpu;
 mod bus;
@@ -13,7 +15,7 @@ mod pixel_fetcher;
 pub(crate) const SCREEN_WIDTH: usize = 160;
 pub(crate) const SCREEN_HEIGHT: usize = 144;
 
-pub(crate) const FRAME_DURATION: Duration = Duration::from_micros(16_742);
+// pub(crate) const FRAME_DURATION: Duration = Duration::from_micros(16_742);
 // const MCYCLE_DURATION: Duration = Duration::from_nanos((1e9 / 1.048576e6) as u64);
 
 pub(crate) trait Mem {
@@ -58,19 +60,13 @@ impl GameBoy {
         self.loaded = true;
     }
 
-    pub fn run_to_frame(&mut self) {
-        while !self.tick() {
-            // just keep ticking.
-        }
-    }
-    
     pub fn tick(&mut self) -> bool {
         if !self.loaded {
             return false;
         }
-        
+
         let mut result = false;
-        
+
         let m_cycles = self.cpu.tick(&mut self.bus);
         let t_cycles = m_cycles.t_cycles();
 
@@ -83,7 +79,7 @@ impl GameBoy {
         for _ in 0..m_cycles.into() {
             self.bus.apu.tick(&self.bus.io_registers);
         }
-        
+
         result
     }
 
