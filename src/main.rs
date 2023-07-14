@@ -9,8 +9,18 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use sdl2::{audio::AudioSpecDesired, messagebox::MessageBoxFlag, pixels::{Color, PixelFormatEnum}, rect::{Point, Rect}, render::{TextureCreator, TextureQuery, WindowCanvas}, ttf::Font, video::Window, video::WindowContext, VideoSubsystem};
-use sdl2::audio::AudioCallback;
+use sdl2::{
+    audio::AudioSpecDesired,
+    messagebox::MessageBoxFlag,
+    pixels::{Color, PixelFormatEnum},
+    rect::{Point, Rect},
+    render::{TextureCreator, TextureQuery, WindowCanvas},
+    ttf::Font,
+    video::Window,
+    video::WindowContext,
+    VideoSubsystem,
+    audio::{AudioCallback, AudioDevice, AudioStatus}
+};
 use tao::{
     dpi::PhysicalSize,
     event::{DeviceEvent, Event, WindowEvent},
@@ -20,7 +30,7 @@ use tao::{
     platform::run_return::EventLoopExtRunReturn,
     platform::windows::WindowExtWindows,
     window::WindowBuilder,
-    menu::MenuId
+    menu::MenuId,
 };
 use crate::{
     gameboy::{Buttons, GameBoy},
@@ -63,6 +73,10 @@ impl AudioCallback for Callback {
     }
 }
 
+struct Context {
+    pub audio_device: AudioDevice<Callback>,
+}
+
 fn main() -> Result<(), String> {
     if let Err(msg) = run() {
         sdl2::messagebox::show_simple_message_box(MessageBoxFlag::ERROR, "YAGBE", &msg, None)
@@ -89,28 +103,21 @@ fn run() -> Result<(), String> {
 
     let sdl_window = init_sdl_window(&window, video_subsystem);
 
-    let mut gameboy = GameBoy::new();
-
-    if let Some(rom_path) = std::env::args().nth(1) {
-        let rom = fs::read(rom_path).map_err(|_| "Could not read ROM file")?;
-
-        gameboy.load(rom);
-    }
-
+    let gameboy = GameBoy::new();
     let gameboy = Arc::new(Mutex::new(gameboy));
 
-    let audio_subsystem = sdl_context.audio()?;
-    let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string())?;
-
     // Load a font
+    let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string())?;
     let font = ttf_context.load_font("JetBrainsMono-Regular.ttf", 9)?;
 
+    // Audio
     let desired_spec = AudioSpecDesired {
         freq: Some(gameboy::apu::AUDIO_SAMPLE_RATE as i32),
         channels: Some(2),
         samples: Some(gameboy::apu::AUDIO_BUFFER_SIZE as u16 / 2), // default sample size
     };
 
+    let audio_subsystem = sdl_context.audio()?;
     let audio_device = audio_subsystem.audio_playback_device_name(1)?;
     let device = audio_subsystem.open_playback(audio_device.as_str(), &desired_spec, |_spec| {
         Callback {
@@ -118,7 +125,13 @@ fn run() -> Result<(), String> {
         }
     })?;
 
-    device.resume();
+    if let Some(rom_path) = std::env::args().nth(1) {
+        let rom = fs::read(rom_path).map_err(|_| "Could not read ROM file")?;
+
+        gameboy.lock().unwrap().load(rom);
+
+        device.resume();
+    }
 
     let mut canvas = sdl_window.into_canvas().build().map_err(|e| e.to_string())?;
     let texture_creator = canvas.texture_creator();
@@ -131,6 +144,10 @@ fn run() -> Result<(), String> {
 
     let mut frame_start = Instant::now();
     let mut frame_delta = FRAME_DURATION;
+
+    let context = Context {
+        audio_device: device,
+    };
 
     event_loop.run_return(|event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
@@ -173,7 +190,7 @@ fn run() -> Result<(), String> {
                 }
             }).unwrap(),
             Event::MenuEvent { menu_id, .. } => gameboy.lock()
-                .map(|mut gameboy| handle_menu_event(&mut gameboy, menu_id))
+                .map(|mut gameboy| handle_menu_event(&mut gameboy, &context, menu_id))
                 .unwrap(),
             Event::MainEventsCleared => {
                 // TODO: Wait until a screen is ready to draw.
@@ -219,10 +236,14 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn handle_menu_event(mut gameboy: &mut GameBoy, menu_id: MenuId) {
+fn handle_menu_event(mut gameboy: &mut GameBoy, context: &Context, menu_id: MenuId) {
     match menu_id {
         MENU_OPEN => {
             open_rom(&mut gameboy).unwrap();
+
+            if context.audio_device.status() != AudioStatus::Playing {
+                context.audio_device.resume();
+            }
         }
         _ => {}
     }
