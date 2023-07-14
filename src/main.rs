@@ -19,7 +19,7 @@ use sdl2::{
     video::Window,
     video::WindowContext,
     VideoSubsystem,
-    audio::{AudioCallback, AudioDevice, AudioStatus}
+    audio::{AudioCallback, AudioDevice, AudioStatus},
 };
 use tao::{
     dpi::PhysicalSize,
@@ -89,6 +89,10 @@ fn main() -> Result<(), String> {
 }
 
 fn run() -> Result<(), String> {
+    let gameboy = GameBoy::new();
+    let gameboy = Arc::new(Mutex::new(gameboy));
+
+    // Window
     let mut event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("Yet Another Game Boy Emulator")
@@ -98,17 +102,25 @@ fn run() -> Result<(), String> {
         .build(&event_loop)
         .map_err(|e| e.to_string())?;
 
+    // SDL
     let sdl_context = sdl2::init()?;
-    let video_subsystem = sdl_context.video()?;
-
-    let sdl_window = init_sdl_window(&window, video_subsystem);
-
-    let gameboy = GameBoy::new();
-    let gameboy = Arc::new(Mutex::new(gameboy));
 
     // Load a font
     let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string())?;
     let font = ttf_context.load_font("JetBrainsMono-Regular.ttf", 9)?;
+
+    // Video
+    let video_subsystem = sdl_context.video()?;
+
+    let sdl_window = init_sdl_window(&window, video_subsystem);
+
+    let mut canvas = sdl_window.into_canvas().build().map_err(|e| e.to_string())?;
+
+    let texture_creator = canvas.texture_creator();
+
+    let mut screen = texture_creator
+        .create_texture_streaming(PixelFormatEnum::RGB24, gameboy::SCREEN_WIDTH as u32, gameboy::SCREEN_HEIGHT as u32)
+        .map_err(|e| e.to_string())?;
 
     // Audio
     let desired_spec = AudioSpecDesired {
@@ -125,29 +137,22 @@ fn run() -> Result<(), String> {
         }
     })?;
 
+    let context = Context {
+        audio_device: device,
+    };
+
     if let Some(rom_path) = std::env::args().nth(1) {
         let rom = fs::read(rom_path).map_err(|_| "Could not read ROM file")?;
 
         gameboy.lock().unwrap().load(rom);
 
-        device.resume();
+        context.audio_device.resume();
     }
-
-    let mut canvas = sdl_window.into_canvas().build().map_err(|e| e.to_string())?;
-    let texture_creator = canvas.texture_creator();
-
-    let mut screen = texture_creator
-        .create_texture_streaming(PixelFormatEnum::RGB24, gameboy::SCREEN_WIDTH as u32, gameboy::SCREEN_HEIGHT as u32)
-        .map_err(|e| e.to_string())?;
 
     let mut show_fps = false;
 
     let mut frame_start = Instant::now();
     let mut frame_delta = FRAME_DURATION;
-
-    let context = Context {
-        audio_device: device,
-    };
 
     event_loop.run_return(|event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
