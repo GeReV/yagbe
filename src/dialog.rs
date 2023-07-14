@@ -41,7 +41,7 @@ pub(crate) fn open_file() -> Result<PathBuf, OpenFileError> {
     ofn.hwndOwner = HWND::default();
     ofn.lpstrFile = str;
     ofn.nMaxFile = std::mem::size_of_val(&bytes) as u32;
-    ofn.lpstrFilter = w!("ROM files\0*.gb\0");
+    ofn.lpstrFilter = w!("ROM files\0*.gb;*.sgb\0");
     ofn.nFilterIndex = 1;
     ofn.lpstrFileTitle = PWSTR::null();
     ofn.nMaxFileTitle = 0;
