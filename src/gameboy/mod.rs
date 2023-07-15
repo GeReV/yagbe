@@ -9,6 +9,7 @@ mod bus;
 mod ppu;
 mod io_registers;
 mod cpu_registers;
+mod cartridge;
 pub(crate) mod apu;
 mod pixel_fetcher;
 
