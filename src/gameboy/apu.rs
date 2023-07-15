@@ -213,8 +213,6 @@ impl Apu {
     }
 
     pub fn tick(&mut self, registers: &IoRegisters) {
-        // TODO: if NR52.7 is off, all registers except NR52 and NRx1 are read-only. There is a different case for GBC.
-
         if self.div_prev & (1 << 4) != 0 && registers.div & (1 << 4) == 0 {
             self.div_apu = self.div_apu.wrapping_add(1);
 
@@ -519,6 +517,8 @@ impl Apu {
 
 impl Mem for Apu {
     fn mem_read(&self, addr: u16) -> u8 {
+        // TODO: if NR52.7 is off, all registers except NR52 and NRx1 are read-only. There is a different case for GBC.
+        
         match addr {
             0xff10 => self.nr10,
             0xff11 => self.nr11 & 0b1100_0000,
@@ -637,7 +637,7 @@ impl Mem for Apu {
             0xff25 => self.nr51 = SoundPanning::from_bits_retain(value),
             0xff26 => self.nr52 = SoundEnable::from_bits_retain(value & (1 << 7)),
             0xff30..=0xff3f => self.wave_ram[(addr - 0xff30) as usize] = value,
-            _ => unreachable!()
+            _ => {}, //unreachable!()
         }
     }
 }
