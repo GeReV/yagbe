@@ -261,12 +261,12 @@ impl Apu {
             let lsfr_short_mode = self.nr43 & (1 << 3) == 1;
             let clock_divider = self.nr43 & 0b0000_0111;
 
-            let tick_frequency_denominator = 1 << clock_shift;
+            let tick_frequency_denominator = 1usize << clock_shift;
             let tick_frequency_denominator = if clock_divider == 0 {
                 // 0 is treated as 0.5, so divide by 2.
                 tick_frequency_denominator as f32 * 0.5
             } else {
-                (clock_divider * tick_frequency_denominator) as f32
+                clock_divider as f32 * tick_frequency_denominator as f32
             };
 
             let tick_frequency = (262_144f32 / tick_frequency_denominator) as usize;
