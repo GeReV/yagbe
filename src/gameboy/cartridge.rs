@@ -13,6 +13,8 @@ const OFFSET_CHECKSUM: usize = 0x014d;
 pub(crate) enum Mapper {
     None,
     MBC1,
+    // MBC2,
+    MBC3,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -70,7 +72,7 @@ impl Cartridge {
             0x01..=0x03 => Mapper::MBC1,
             0x05 | 0x06 => unimplemented!("MBC2"),
             0x0b..=0x0d => unimplemented!("MMM01"),
-            0x0f..=0x13 => unimplemented!("MBC3"),
+            0x0f..=0x13 => Mapper::MBC3,
             0x19..=0x1e => unimplemented!("MBC5"),
             0x20 => unimplemented!("MBC6"),
             0x22 => unimplemented!("MBC7"),
@@ -214,6 +216,79 @@ impl Cartridge {
             _ => unreachable!()
         }
     }
+
+
+    pub(crate) fn mem_read_mbc3(&self, addr: u16) -> u8 {
+        match addr {
+            0x0000..=0x3fff => self.rom_banks[0][addr as usize],
+            0x4000..=0x7fff => self.rom_banks[self.rom_current_bank as usize][(addr - 0x4000) as usize],
+            0xa000..=0xbfff => {
+                let addr = (addr - 0xa000) as usize;
+
+                match self.ram_enable {
+                    false => 0xff,
+                    _ => self.ram_banks[self.ram_current_bank as usize][addr]
+                }
+            }
+            _ => unreachable!()
+        }
+    }
+
+    pub(crate) fn mem_write_mbc3(&mut self, addr: u16, value: u8) {
+        match addr {
+            0x0000..=0x1fff => {
+                // NOTE: This also enables the RTC.
+                self.ram_enable = value & 0x0f == 0x0a;
+            }
+            0x2000..=0x3fff => {
+                let mut bank = value & 0b0111_1111;
+
+                if bank == 0x00 {
+                    bank = 0x01;
+                }
+
+                self.rom_current_bank = bank;
+            }
+            0x4000..=0x5fff => match value {
+                0x00..=0x03 | 0x08..=0x0c => {
+                    self.ram_current_bank = value;
+                }
+                _ => unreachable!()
+            }
+            0x6000..=0x7fff => {
+                // When writing $00, and then $01 to this register, the current time becomes latched into the RTC registers. 
+                // The latched data will not change until it becomes latched again, by repeating the write $00->$01 procedure. 
+                // This provides a way to read the RTC registers while the clock keeps ticking.
+                // TODO: RTC latch
+            }
+            0xa000..=0xbfff => {
+                if !self.ram_enable {
+                    return;
+                }
+
+                match self.ram_current_bank {
+                    bank @ 0x00..=0x03 => {
+                        let addr = (addr - 0xa000) as usize;
+
+                        self.ram_banks[bank as usize][addr] = value;
+                    }
+                    0x08..=0x0c => {
+                        // $08  RTC S   Seconds   0-59 ($00-$3B)
+                        // $09  RTC M   Minutes   0-59 ($00-$3B)
+                        // $0A  RTC H   Hours     0-23 ($00-$17)
+                        // $0B  RTC DL  Lower 8 bits of Day Counter ($00-$FF)
+                        // $0C  RTC DH  Upper 1 bit of Day Counter, Carry Bit, Halt Flag
+                        //       Bit 0  Most significant bit of Day Counter (Bit 8)
+                        //       Bit 6  Halt (0=Active, 1=Stop Timer)
+                        //       Bit 7  Day Counter Carry Bit (1=Counter Overflow)
+                        // TODO: RTC register write
+                    }
+                    _ => unreachable!()
+                }
+            }
+            _ => unreachable!()
+        }
+    }
 }
 
 impl Mem for Cartridge {
@@ -221,6 +296,8 @@ impl Mem for Cartridge {
         return match self.mapper {
             Mapper::None => self.mem_read_mbc_none(addr),
             Mapper::MBC1 => self.mem_read_mbc1(addr),
+            // Mapper::MBC2 => self.mem_read_mbc2(addr),
+            Mapper::MBC3 => self.mem_read_mbc3(addr),
         };
     }
 
@@ -228,6 +305,8 @@ impl Mem for Cartridge {
         return match self.mapper {
             Mapper::None => {}
             Mapper::MBC1 => self.mem_write_mbc1(addr, value),
+            // Mapper::MBC2 => self.mem_write_mbc2(addr, value),
+            Mapper::MBC3 => self.mem_write_mbc3(addr, value),
         };
     }
 }
