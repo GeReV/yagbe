@@ -126,11 +126,11 @@ fn run() -> Result<(), String> {
     let desired_spec = AudioSpecDesired {
         freq: Some(gameboy::apu::AUDIO_SAMPLE_RATE as i32),
         channels: Some(2),
-        samples: Some(gameboy::apu::AUDIO_BUFFER_SIZE as u16 / 2), // default sample size
+        samples: Some(gameboy::apu::AUDIO_BUFFER_SIZE as u16 / 2),
     };
 
     let audio_subsystem = sdl_context.audio()?;
-    let audio_device = audio_subsystem.audio_playback_device_name(1)?;
+    let audio_device = audio_subsystem.audio_playback_device_name(0)?;
     let device = audio_subsystem.open_playback(audio_device.as_str(), &desired_spec, |_spec| {
         Callback {
             gameboy: gameboy.clone()
